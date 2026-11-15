@@ -317,6 +317,37 @@ private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutI
     Result (TyAndLayout TypeId) := do
   return ⟨id,← metadata.layoutById layoutId⟩
 
+/-- Pinned TyAndLayout::field for an enum's synthetic tag field. Its type is
+the tag primitive's type; its layout is LayoutData::scalar(tag). -/
+private def tagField (metadata : RuntimeMetadata) (tag : ABI.Scalar) :
+    Result (TyAndLayout TypeId) := do
+  let p := metadata.source.queries.primitives
+  let typeId ← match tag.primitive with
+    | .Int .I8 signed => pure (if signed then p.i8 else p.u8)
+    | .Int .I16 signed => pure (if signed then p.i16 else p.u16)
+    | .Int .I32 signed => pure (if signed then p.i32 else p.u32)
+    | .Int .I64 signed => pure (if signed then p.i64 else p.u64)
+    | .Int .I128 signed => pure (if signed then p.i128 else p.u128)
+    | .Pointer _ => pure p.unitPointerMut
+    | .Float _ => throw (.unsupported "floating enum tag primitive")
+  let _ ← metadata.node typeId
+  let width ← tag.size metadata.target |>.mapError (fun e => .invalid "enum tag size" (reprStr e))
+  let align ← tag.defaultAlign metadata.target |>.mapError (fun e => .invalid "enum tag align" (reprStr e))
+  let range ← tag.validRange metadata.target |>.mapError (fun e => .invalid "enum tag range" (reprStr e))
+  let full ← range.isFullFor width |>.mapError (fun e => .invalid "enum tag range" (reprStr e))
+  let code := match tag.primitive with
+    | .Int _ true => 1 | .Int _ false => 2 | .Pointer _ => 4 | .Float _ => 3
+  let rotate (bits : U128) : UInt64 :=
+    let low := bits.toNat % 2^64
+    UInt64.ofNat (low / 2^16 + (low % 2^16) * 2^48)
+  let seed := width.bytes + UInt64.ofNat (code * 2^32) + rotate range.start + rotate range.end
+  let row : LayoutData := {
+    fields := .Primitive, variants := .Single 0, backendRepr := .Scalar tag,
+    largestNiche := if full then none else some ⟨Size.ZERO,tag.primitive,range⟩,
+    uninhabited := false, align, size := width, maxReprAlign := none,
+    unadjustedAbiAlign := align.abi, reprC := false, randomizationSeed := seed }
+  return ⟨typeId,row⟩
+
 /-- Source type relationships are read from typed compiler payloads, never
 from display/debug strings. ADT field selection uses the selected variant. -/
 def field (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
@@ -337,12 +368,23 @@ def field (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Na
     | .tuple values => require values[index]? "tuple field"
     | .array element .. | .slice element => pure element
     | .str => return ← stringElementLayout metadata
+    | .closure _ args count => do
+      unless index < count do throw (.invalid "closure field" "index exceeds capture count")
+      let some (.Type upvars) := args.back? | throw (.invalid "closure field" "tupled upvars argument absent")
+      let tuple ← metadata.node upvars
+      let .tuple fields := tuple.shape | throw (.invalid "closure field" "upvars argument is not a tuple")
+      unless fields.size == count do throw (.invalid "closure field" "tuple/capture count differs")
+      require fields[index]? "closure capture field"
     | .adt data => do
-      let .Single selected := parent.layout.variants
-        | throw (.unsupported "ADT field needs selected variant")
-      let variant ← require (data.variants.find? (·.index == selected)) "ADT variant"
-      let source ← require (variant.fields.find? (·.index == index)) "ADT field"
-      pure source.typeId
+      match parent.layout.variants with
+      | .Multiple tag _ tagIndex _ =>
+        unless index == tagIndex do throw (.unsupported "enum field requires selected variant")
+        return ← tagField metadata tag
+      | .Single selected =>
+        let variant ← require (data.variants.find? (·.index == selected)) "ADT variant"
+        let source ← require (variant.fields.find? (·.index == index)) "ADT field"
+        pure source.typeId
+      | .Empty => throw (.unsupported "empty ADT field")
     | _ => throw (.unsupported "type field query")
   metadata.lookup id
 

@@ -117,7 +117,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     throw (.invalidProgram "Windows platform environment has a mismatched target family")
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let checkArgumentCompat := CompilerCallConstruction.argumentCompat p compatibilityBudget
   let access := main.access
   let readScalar := fun (operand : OpTy Provenance) => do
     let immediate ← PlaceMachine.readImmediate access operand
@@ -216,7 +216,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     platform := allocation
     systemConvention := do return (← CompilerNamedShimAbi.query p.namedAbi "HeapAlloc").conv
     expectedAbi
-    argumentCompat := calls.checkArgumentCompat choice
+    argumentCompat := checkArgumentCompat choice
     checkSymbolClash := fun name =>
       match CompilerForeignSymbols.checkSymbolClash symbols name with
       | .ok () => pure () | .error error => throw error

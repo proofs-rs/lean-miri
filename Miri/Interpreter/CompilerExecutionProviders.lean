@@ -1,3 +1,5 @@
+import Miri.Input.SourceCompilerCasts
+import Miri.Input.SourceCompilerRuntime
 import Miri.Input.CompilerPaths
 import Miri.Input.CompilerRuntimeQueries
 import Miri.Input.CompilerPrimitiveFacts
@@ -84,24 +86,55 @@ def scalarHooks [PointerProvenance P] (facts : CompilerFacts.Context)
 
 /-- Compiler classification for pointer→place construction/dereference. The
 Box test uses source is_global_box rather than scalar ABI shape. -/
-def pointerCompiler (prepared : CompilerFactAdapters.Prepared) : PointerPlaceMachine.Compiler K U C := {
-  kind := fun _ ty => liftResult do
-    match (← node prepared.context ty).shapeKind with
-    | .reference => pure .reference | .rawPointer => pure .raw
-    | .adt =>
-      if ← query "is_global_box" (CompilerFacts.boolean prepared.context ty "is_global_box") then pure .box else pure .other
-    | _ => pure .other
-  builtinDeref := fun _ ty => liftResult (query "builtin_deref" (CompilerFacts.builtinDeref prepared.context ty true))
-  layoutOf := fun _ ty => liftResult (query "layout_of" (CompilerFacts.layoutOf prepared.context ty))
-  structTail := fun _ ty => liftResult do
-    let tail ← query "struct_tail_for_codegen" (CompilerFacts.requiredType prepared.context ty "metadata_tail")
-    match (← node prepared.context tail).shapeKind with
-    | .slice => pure .slice | .str => pure .str | .foreign => pure .foreign
-    | .dynamicTraitObject =>
-      let .dynamic expected ← query "dynamic predicates" (CompilerFactAdapters.validityKind prepared tail)
-        | throw (.invalidProgram "dynamic tail compiler classification mismatch")
-      pure (.dynamic expected)
-    | _ => pure .other }
+private def sourcePointerQuery (value : Except String A) : RvalueM S A :=
+  match value with
+  | .ok value => pure value
+  | .error reason => throw (.unsupported s!"source pointer query: {reason}")
+
+def pointerCompiler (prepared : CompilerFactAdapters.Prepared)
+    (world : SourceCompilerWorld.Access (ValidityMachine.State K U)) : PointerPlaceMachine.Compiler K U C :=
+  let sourceMode := prepared.context.runtime.source.sourceMaterial.isSome
+  let current := SourceCompilerRuntime.current prepared.context.runtime.target world
+  { kind := fun _ ty => if sourceMode then do
+      let runtime ← current
+      let node ← sourcePointerQuery (runtime.node ty |>.mapError toString)
+      match node.shape with
+      | .reference .. => pure .reference
+      | .rawPointer .. => pure .raw
+      | .adt _ | .alias .. => throw (.unsupported "source pointer ADT/Box role unavailable")
+      | _ => pure .other
+    else liftResult do
+      match (← node prepared.context ty).shapeKind with
+      | .reference => pure .reference | .rawPointer => pure .raw
+      | .adt =>
+        if ← query "is_global_box" (CompilerFacts.boolean prepared.context ty "is_global_box") then pure .box else pure .other
+      | _ => pure .other
+    builtinDeref := fun _ ty => if sourceMode then do
+      let some current := world.get (← get) | throw (.unsupported "source pointer World unavailable")
+      sourcePointerQuery (SourceCompilerCasts.builtinDeref current ty true)
+    else liftResult (query "builtin_deref" (CompilerFacts.builtinDeref prepared.context ty true))
+    layoutOf := fun _ ty => if sourceMode then do
+      let runtime ← current
+      sourcePointerQuery (runtime.lookup ty |>.mapError toString)
+    else liftResult (query "layout_of" (CompilerFacts.layoutOf prepared.context ty))
+    structTail := fun _ ty => if sourceMode then do
+      let some state := world.get (← get) | throw (.unsupported "source pointer World unavailable")
+      let tail ← sourcePointerQuery (SourceCompilerCasts.structTail state ty)
+      let runtime ← current
+      let node ← sourcePointerQuery (runtime.node tail |>.mapError toString)
+      match node.shape with
+      | .slice _ => pure .slice | .str => pure .str | .foreign _ => pure .foreign
+      | .dynamicTraitObject expected .. => pure (.dynamic expected)
+      | _ => pure .other
+    else liftResult do
+      let tail ← query "struct_tail_for_codegen" (CompilerFacts.requiredType prepared.context ty "metadata_tail")
+      match (← node prepared.context tail).shapeKind with
+      | .slice => pure .slice | .str => pure .str | .foreign => pure .foreign
+      | .dynamicTraitObject =>
+        let .dynamic expected ← query "dynamic predicates" (CompilerFactAdapters.validityKind prepared tail)
+          | throw (.invalidProgram "dynamic tail compiler classification mismatch")
+        pure (.dynamic expected)
+      | _ => pure .other }
 
 /-- Source project_to_ptr_in_box: both field projections precede boxed_ty,
 mutable raw-pointer type construction and wrapping transmute. -/
@@ -120,6 +153,7 @@ def projectBox (facts : CompilerFacts.Context) (runtime : CompilerRuntimeQueries
 /-- Complete scalar arithmetic dictionary on the canonical machine: compiler
 class/result types, exact FloatOps, real Miri pointers and pointer validity. -/
 def machineScalarHooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
+    (world : SourceCompilerWorld.Access (ValidityMachine.State K U))
     (access : ValidityMachine.Access K U)
     (pointers : PointerMachine.Hooks K (ValidityMachine.Control U))
     (dynamic : DynamicLayoutHooks Provenance (ValidityMachine.State K U) C)
@@ -135,7 +169,7 @@ def machineScalarHooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared
     (fun _ ty => liftResult do
       let pointee ← query "builtin_deref" (CompilerFacts.requiredType facts ty "builtin_deref_explicit")
       query "layout_of pointee" (CompilerFacts.layoutOf facts pointee))
-  PointerPlaceMachine.bindScalarOps access (pointerCompiler prepared) dynamic vtable fuel scalar
+  PointerPlaceMachine.bindScalarOps access (pointerCompiler prepared world) dynamic vtable fuel scalar
 
 /-- Install exactly that dictionary at the MIR evaluation boundary. Choice,
 operand evaluation and source result-layout assertions stay in Rvalue. -/

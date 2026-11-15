@@ -1,5 +1,6 @@
 import Miri.Input.CompilerVTableRuntime
 import Miri.Input.CallResolution
+import Miri.Input.SourceCompilerBodies
 
 /-! Shared preparation and actual compiler-leaf wiring for virtual/drop/caller
 calls. All adapters retain one final compilation-local identity table; none
@@ -69,14 +70,19 @@ def runtimeHooks (prepared : Prepared) (image : AllocationImage.Imported)
     compiler := compilerHooks prepared base.compiler
     vtable := vtableHooks prepared image memory base.vtable }
 
-/-- Source load_mir returns the exact body-table key with executable MIR. Missing
-or ambiguous instance bodies, failed substitutions and templates are errors. -/
-def loadMir (prepared : Prepared) (fnInstance : CallInstance) : EStateM StepError S LoadedBody :=
-  lift (CallResolution.loadedBodyOfInstance prepared.calls fnInstance)
+/-- Source load_mir reads the current shared World at the operation, rather
+than a Prepared snapshot. Only a source-derived installed body can load; an
+unseeded World, identity-only handle or unavailable body is Unsupported. -/
+def loadMir (access : SourceCompilerWorld.Access S) (fnInstance : CallInstance) :
+    EStateM StepError S LoadedBody := do
+  let some world := access.get (← get) | throw (.unsupported "source compiler World is unavailable")
+  let (world,body) ← lift (SourceCompilerBodies.demandLoadedBody world fnInstance)
+  modify (fun state => access.put state world)
+  return body
 
-def bindFunctionCalls (prepared : Prepared)
+def bindFunctionCalls (access : SourceCompilerWorld.Access S)
     (base : FunctionCalls.Hooks P S C E Other Extern FnABI ArgABI) :
     FunctionCalls.Hooks P S C E Other Extern FnABI ArgABI :=
-  { base with loadMir := fun _ fnInstance => loadMir prepared fnInstance }
+  { base with loadMir := fun _ fnInstance => loadMir access fnInstance }
 
 end Miri.Input.CompilerCallPipeline

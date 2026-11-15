@@ -63,11 +63,4 @@ def abiOfInstance (prepared : Prepared) (callee : CallInstance) (extra : Array M
     | throw "instance ABI bucket index invariant"
   CallResolution.functionAbiId prepared.runtime (← entry.result)
 
-def hooks (prepared : Prepared)
-    (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
-    CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
-  { base with fnAbiOfInstance := fun _ callee extra =>
-      match abiOfInstance prepared callee extra with
-      | .ok abi => pure abi
-      | .error error => throw (.invalidProgram error) }
 end Miri.Input.CompilerInstanceAbi

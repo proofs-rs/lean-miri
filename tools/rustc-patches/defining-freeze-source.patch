@@ -1,0 +1,44 @@
+--- a/compiler/rustc_metadata/src/rmeta/mod.rs
++++ b/compiler/rustc_metadata/src/rmeta/mod.rs
+@@ -69,7 +69,7 @@
+ /// Metadata encoding version.
+ /// N.B., increment this if you change the format of metadata such that
+ /// the rustc version can't be found to compare with `rustc_version()`.
+-const METADATA_VERSION: u8 = 12;
++const METADATA_VERSION: u8 = 13;
+ 
+ /// Metadata header which includes `METADATA_VERSION`.
+ ///
+@@ -328,7 +328,7 @@
+     profiler_runtime: bool,
+     symbol_mangling_version: SymbolManglingVersion,
+     /// Raw defining Session options, not parameter-attribute deductions.
+-    defining_compilation: (u8, bool),
++    defining_compilation: (u8, bool, bool),
+ 
+     specialization_enabled_in: bool,
+ }
+--- a/compiler/rustc_metadata/src/rmeta/encoder.rs
++++ b/compiler/rustc_metadata/src/rmeta/encoder.rs
+@@ -816,7 +816,7 @@
+                 defining_compilation: (match tcx.sess.opts.optimize {
+                     OptLevel::No => 0, OptLevel::Less => 1, OptLevel::More => 2,
+                     OptLevel::Aggressive => 3, OptLevel::Size => 4, OptLevel::SizeMin => 5,
+-                }, tcx.sess.opts.incremental.is_some()),
++                }, tcx.sess.opts.incremental.is_some(), tcx.lang_items().freeze_trait().is_some()),
+ 
+                 crate_deps,
+                 dylib_dependency_formats,
+--- a/compiler/rustc_metadata/src/rmeta/decoder/cstore_impl.rs
++++ b/compiler/rustc_metadata/src/rmeta/decoder/cstore_impl.rs
+@@ -359,8 +359,9 @@
+     is_no_builtins => { cdata.root.no_builtins }
+     symbol_mangling_version => { cdata.root.symbol_mangling_version }
+     lean_miri_defining_compilation => {
+-        let (optimization, incremental) = cdata.root.defining_compilation;
++        let (optimization, incremental, freeze_present) = cdata.root.defining_compilation;
+         usize::from(optimization) | (usize::from(incremental) << 3)
++            | (usize::from(freeze_present) << 4) | (1 << 5)
+     }
+     specialization_enabled_in => { cdata.root.specialization_enabled_in }
+     reachable_non_generics => {

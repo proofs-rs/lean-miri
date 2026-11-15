@@ -22,6 +22,7 @@ private def lift (value : Except ProjectionError A) : EStateM StepError S A :=
   | .error error => throw (IntrinsicVectorMachine.projectionError error)
 
 def arrays : RuntimeArrayQueries.Access (State Os R P H D O Aff B Host) where
+  sourceCompiler := some EvalBackendMachine.sourceCompilerAccess
   get := fun s => s.machine.user.payload.payload.user.types
   set := fun s types => {s with machine := {s.machine with user := {s.machine.user with payload :=
     {s.machine.user.payload with payload := {s.machine.user.payload.payload with user :=
@@ -114,49 +115,78 @@ def context (prepared : CompilerFactAdapters.Prepared) (maxSizeOfVal : Size) (de
     (pointers : PointerMachine.Hooks MiriMemoryKind
       (ValidityMachine.Control (ThreadStacks.Storage (EvalWorld.World Os R P H D O Aff B Host))))
     (snapshot : State Os R P H D O Aff B Host) : ProjectionCx Provenance :=
-  let world := arrays.get snapshot
+  let view : Except ProjectionError RuntimeArrayTypes.World := do
+    let arraysWorld := arrays.get snapshot
+    match EvalBackendMachine.sourceCompilerAccess.get snapshot with
+    | none => pure arraysWorld
+    | some compiler => (SourceCompilerArrays.view arraysWorld compiler).mapError ProjectionError.obligation
   { target := prepared.context.runtime.target.base
     maxSizeOfVal := maxSizeOfVal
     isSliceOrStr := fun ty => do
+      let world ← view
       let node ← shape world.metadata ty
       pure (node.shapeKind == .slice || node.shapeKind == .str)
-    field := field world
-    variant := fun layout index => metadataResult (world.metadata.forVariant layout index)
+    field := fun layout index => do field (← view) layout index
+    variant := fun layout index => do metadataResult ((← view).metadata.forVariant layout index)
     dynamicAlign := fun _ _ => .error (.obligation "dynamic alignment requires effectful projection")
-    packedAlign := packed world.metadata
+    packedAlign := fun ty => do packed (← view).metadata ty
     immediateOffset := fun v source offset target => projectionImmediateOffset
       (assertAbi prepared.context.runtime.target) v source offset target debug
     memoryOffset := memoryOffset pointers snapshot
-    subsliceLayout := subsliceKnown world
-    layoutOf := fun ty => arrayResult (RuntimeArrayTypes.lookup world ty)
+    subsliceLayout := fun base count => do subsliceKnown (← view) base count
+    layoutOf := fun ty => do arrayResult (RuntimeArrayTypes.lookup (← view) ty)
     deref := fun _ => .error (.obligation "typed dereference requires effectful projection")
     localIndex := fun _ => .error (.obligation "local index requires effectful local read") }
 
-def dynamicKind (prepared : CompilerFactAdapters.Prepared) (ty : TyId) : Except ProjectionError DynamicTypeKind := do
-  let node ← shape prepared.context.runtime ty
+def dynamicKindOf (runtime : RuntimeMetadata) (ty : TyId) : Except ProjectionError DynamicTypeKind := do
+  let node ← shape runtime ty
   match node.shape with
   | .adt data => pure (.adt data.representation.simd)
   | .tuple _ => pure (.tuple false)
-  | .dynamicTraitObject .. =>
-    let .dynamic expected ← query (CompilerFactAdapters.validityKind prepared ty)
-      | throw (.invariant "dynamic type missing compiler predicates")
-    pure (.dynamic expected)
+  | .dynamicTraitObject expected .. => pure (.dynamic expected)
   | .slice _ => pure .slice | .str => pure .str | .foreign _ => pure .foreign
   | _ => throw (.invariant "invalid unsized dynamic layout kind")
+
+def dynamicKind (prepared : CompilerFactAdapters.Prepared) (ty : TyId) : Except ProjectionError DynamicTypeKind :=
+  dynamicKindOf prepared.context.runtime ty
+
+/-- Every effectful projection queries the same refreshed canonical view. The
+array cache is a view of this World, never another source of type identities. -/
+def currentField (layout : LocalLayout) (index : Nat) :
+    EStateM StepError (State Os R P H D O Aff B Host) LocalLayout := do
+  let world ← RuntimeArrayQueries.current arrays
+  lift (field world layout index)
+def currentVariant (layout : LocalLayout) (index : Nat) :
+    EStateM StepError (State Os R P H D O Aff B Host) LocalLayout := do
+  let world ← RuntimeArrayQueries.current arrays
+  lift (metadataResult (world.metadata.forVariant layout index))
+def currentPacked (ty : TyId) :
+    EStateM StepError (State Os R P H D O Aff B Host) (Option Align) := do
+  let world ← RuntimeArrayQueries.current arrays
+  lift (packed world.metadata ty)
+def currentSliceOrStr (ty : TyId) :
+    EStateM StepError (State Os R P H D O Aff B Host) Bool := do
+  let world ← RuntimeArrayQueries.current arrays
+  let node ← lift (shape world.metadata ty)
+  return node.shapeKind == .slice || node.shapeKind == .str
+def currentDynamicKind (ty : TyId) :
+    EStateM StepError (State Os R P H D O Aff B Host) DynamicTypeKind := do
+  let world ← RuntimeArrayQueries.current arrays
+  lift (dynamicKindOf world.metadata ty)
 
 def dynamic (prepared : CompilerFactAdapters.Prepared)
     (base : DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C) :=
   {base with
     target := prepared.context.runtime.target.base
-    classify := fun _ ty => lift (dynamicKind prepared ty)
-    field := fun _ layout index => do lift (field (arrays.get (← get)) layout index)
-    packedAlign := fun _ ty => lift (packed prepared.context.runtime ty)}
+    classify := fun _ ty => currentDynamicKind ty
+    field := fun _ layout index => currentField layout index
+    packedAlign := fun _ ty => currentPacked ty}
 
 /-- Array constructor effects occur after caller bounds/stride checks. Slice
 metadata is converted with the actual target pointer width. -/
 def subslice (base : LocalLayout) (count : UInt64) : EStateM StepError (State Os R P H D O Aff B Host)
     (LocalLayout × MemPlaceMeta Provenance) := do
-  let world := arrays.get (← get)
+  let world ← RuntimeArrayQueries.current arrays
   if world.entries.any (·.value.ty == base.ty) then
     let (_,element) ← lift (arrayResult (RuntimeArrayTypes.arrayInfo world base.ty))
     return (← RuntimeArrayQueries.arrayLayout arrays element.ty count,.none)
@@ -184,12 +214,10 @@ def bindProjection (prepared : CompilerFactAdapters.Prepared)
   {base with
     target := prepared.context.runtime.target.base
     dynamic := dynamic prepared base.dynamic
-    isSliceOrStr := fun _ ty => do
-      let node ← lift (shape prepared.context.runtime ty)
-      pure (node.shapeKind == .slice || node.shapeKind == .str)
-    field := fun _ layout index => do lift (field (arrays.get (← get)) layout index)
-    variant := fun _ layout index => lift (metadataResult (prepared.context.runtime.forVariant layout index))
-    packedAlign := fun _ ty => lift (packed prepared.context.runtime ty)
+    isSliceOrStr := fun _ ty => currentSliceOrStr ty
+    field := fun _ layout index => currentField layout index
+    variant := fun _ layout index => currentVariant layout index
+    packedAlign := fun _ ty => currentPacked ty
     subsliceLayout := fun _ => subslice
     layoutOf := fun _ ty => RuntimeArrayQueries.layoutOf arrays ty}
 end Miri.Input.EvalProjectionMachine

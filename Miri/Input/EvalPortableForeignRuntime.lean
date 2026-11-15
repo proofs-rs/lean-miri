@@ -30,7 +30,7 @@ def prepareSymbols (providers : CompilerProviders.Prepared) :
 def sourceSymbols (providers : CompilerProviders.Prepared)
     (prepared : CompilerForeignSymbols.Prepared) :
     EvalForeignConstruction.Symbols (State Os R P H D O Aff B Host) :=
-  CompilerForeignSymbols.hooks prepared providers.lifecycle.calls
+  CompilerForeignSymbols.hooks prepared EvalCoreMachine.sourceCompilerAccess
 
 def sourceOptions (prepared : CompilerForeignSymbols.Prepared)
     (options : EvalForeignConstruction.Options) : EvalForeignConstruction.Options :=
@@ -127,7 +127,7 @@ def portableOther [DecidableEq MiriMemoryKind]
     String → FnAbi TyId → Array (OpTy Provenance) → RuntimePlace Provenance →
       M Os R P H D O Aff B Host (Option ForeignItems.EmulateItemResult) := by
   let exactForeign : EvalForeignConstruction.Symbols (State Os R P H D O Aff B Host) :=
-    CompilerForeignSymbols.hooks symbols providers.lifecycle.calls
+    CompilerForeignSymbols.hooks symbols EvalCoreMachine.sourceCompilerAccess
   let sourceForeign := {foreign with
     noAllocShimSymbol := symbols.noAllocShimSymbol
     allocatorSymbol := exactForeign.allocatorSymbol

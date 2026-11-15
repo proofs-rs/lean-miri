@@ -2,6 +2,7 @@ import Miri.Interpreter.RaceMode
 import Miri.Input.EvalBootstrap
 import Miri.Interpreter.WindowsExitMachine
 import Miri.Input.RuntimeArrayTypes
+import Miri.Input.SourceCompilerWorld
 import Miri.Interpreter.IntrinsicSymbolsMachine
 import Miri.Interpreter.ExecutionChoices
 import Miri.Interpreter.ExecutionSafety
@@ -17,6 +18,9 @@ structure World (Os R Payload H D O Aff B Host : Type) where
   main : Option MainMachine.Data
   exit : WindowsExitMachine.Registry := {}
   types : RuntimeArrayTypes.World
+  /-- Evaluation-local compiler identities and demanded source facts. Every
+  compiler adapter must read this one persistent World. -/
+  sourceCompiler : Option SourceCompilerWorld.World := none
   functions : FunctionPointers.Registry O
   vtables : VTableMachine.Registry
   symbols : IntrinsicSymbolsMachine.Registry := .empty
@@ -33,6 +37,15 @@ abbrev User (Os R Payload H D O Aff B Host : Type) :=
   ThreadStacks.Storage (PointerMachine.User (ValidityMachine.Control (World Os R Payload H D O Aff B Host)))
 abbrev State (Os R Payload H D O Aff B Host : Type) :=
   MachineHooks.State MiriMemoryKind (User Os R Payload H D O Aff B Host)
+
+/-- The outer machine's compiler queries share this evaluation-local World. -/
+def sourceCompilerAccess : SourceCompilerWorld.Access
+    (State Os R Payload H D O Aff B Host) where
+  get := fun state => state.machine.user.user.payload.payload.sourceCompiler
+  put := fun state compiler =>
+    {state with machine := {state.machine with user := {state.machine.user with user :=
+      {state.machine.user.user with payload := {state.machine.user.user.payload with payload :=
+        {state.machine.user.user.payload.payload with sourceCompiler := some compiler}}}}}}
 
 def stdioReplayAccess : HostStdio.Access (World Os R Payload H D O Aff B Host) :=
   ⟨(·.stdioReplay), fun world replay => {world with stdioReplay := replay}⟩

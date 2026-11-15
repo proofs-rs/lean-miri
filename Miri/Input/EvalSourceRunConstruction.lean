@@ -641,6 +641,9 @@ def runFromPreinitializedHost
         (EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
           (EvalUnixSourceConstruction.Other Raw Listener TcpStream Error) CpuAffinity.Mask B
           Poll Instant System Native Profiler)) := do
+  let sourceCompiler ← (SourceCompilerWorld.create prepared.compiler.program.input).mapError
+    (fun reason => .invalidProgram s!"source compiler world: {reason}")
+  let initialConfiguration := {initialConfiguration with sourceCompiler := some sourceCompiler}
   let initial ← InitialMachine.create initialConfiguration initialMemory runtimeTypes choiceTape host
   runFromInitial prepared image bytes options sourceLeaves choice initialConfiguration
     bootstrapConfiguration limits capacity iterationFuel outerChoices initial
@@ -711,6 +714,10 @@ def runFromSourceProfiled
     cpuCount := sourceLeaves.foreignSource.host.unixConfig.numCpus
     cUlongBytes := cULong.layout.size.bytes.toNat
     endian := prepared.compiler.runtime.target.base.endian }
+  let sourceCompiler ← match SourceCompilerWorld.create prepared.compiler.program.input with
+    | .ok value => pure value
+    | .error reason => throw (.invalidProgram s!"source compiler world: {reason}")
+  let initialConfiguration := {initialConfiguration with sourceCompiler := some sourceCompiler}
   let initial ← MachineConstruction.create hostRuntime sourceLeaves.hostConfiguration machineTarget
     initialConfiguration initialMemory runtimeTypes choiceTape
   match runFromInitialProfiled profile prepared image bytes options sourceLeaves choice initialConfiguration

@@ -284,7 +284,7 @@ def fromSourceWithLifecycle [DecidableEq MiriMemoryKind]
     permissionDenied := errors.hostFromKind .PermissionDenied
     hostUsizeBits }
   let symbols ← p.foreignSymbols |>.mapError StepError.unsupported
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let checkArgumentCompat := CompilerCallConstruction.argumentCompat p compatibilityBudget
   let transmuteProjection := place.projection choice
   let transmute := fun operand target => do
     let projection ← transmuteProjection
@@ -302,7 +302,7 @@ def fromSourceWithLifecycle [DecidableEq MiriMemoryKind]
       unless expected.args == request.args && expected.ret == request.ret && expected.variadic == request.variadic do
         throw (.invalidProgram s!"Unix FD signature recipe disagrees with `{name}`")
       CompilerNamedShimAbi.query p.namedAbi name
-    argumentCompat := callCompiler.checkArgumentCompat choice
+    argumentCompat := checkArgumentCompat choice
     checkSymbolClash := fun name =>
       match CompilerForeignSymbols.checkSymbolClash symbols name with
       | .ok () => pure ()

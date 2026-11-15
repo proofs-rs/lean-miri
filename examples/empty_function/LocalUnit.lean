@@ -49,18 +49,20 @@ theorem write_no_clocks (frames : Array F) (frame : F)
     pure, EStateM.pure]
 
 /-- Installing the sole unit return local uses the actual storage-live driver.
-The pure size classifier is compiler metadata; no allocator or callback outcome
+The size classifier is a state-preserving compiler query; no allocator or callback outcome
 is assumed. The old local is dead, so no allocation is deallocated. -/
 theorem storage_live_zero (hooks : MachineHooks.StorageHooks K U)
     (frames : Array F) (frame : F) (machine : MachineHooks.MachineState K U)
     (ty : Miri.MIR.TyId)
     (locals : frame.locals = #[{value := .dead, layout := none}])
     (types : frame.body.locals = #[ty])
-    (trivial : hooks.veryTriviallySized ty = .ok true)
+    (trivial : hooks.veryTriviallySized ty (current frames frame machine) =
+      .ok true (current frames frame machine))
     (noClocks : frame.extra.dataRace = none) :
     MachineHooks.storageLiveDyn hooks 0 .none (current frames frame machine) =
       .ok () (current frames {frame with
         locals := #[{value := .live (.immediate .uninit), layout := none}]} machine) := by
+  simp only [current] at trivial
   with_unfolding_all
     simp [MachineHooks.storageLiveDyn, current, MachineHooks.currentFrame,
       MachineHooks.setCurrentFrame, Stack.currentFrame?, Frame.getLocal,

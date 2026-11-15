@@ -46,7 +46,7 @@ def initial : IO (MachineHooks.State Unit (List String)) := do
     #[(allocId, VClockAlloc.newAllocation (ByteSize.ofU64 1 (by decide)) (← timestamp 9) idx)], #[], []⟩⟩
 def blocked (message : String) : MachineHooks.M Unit (List String) A := throw (.unsupported message)
 def storage : MachineHooks.StorageHooks Unit (List String) := {
-  veryTriviallySized := fun _ => .ok true
+  veryTriviallySized := fun _ => pure true
   layout := fun _ => blocked "unused layout query"
   allocateDyn := fun _ _ => blocked "unused dynamic allocation"
   deallocateStack := fun _ => blocked "unused local deallocation" }
@@ -175,6 +175,18 @@ def checkReborrowDiagnostics (start : MachineHooks.State Unit (List String)) : I
 
 def main : IO Unit := do
   let start ← initial
+  let liveStorage := {storage with veryTriviallySized := fun _ => do
+    modify fun state => {state with machine := {state.machine with user := ["sizedness"]}}
+    pure true}
+  let (queried,result) := MachineHooks.run (MachineHooks.storageLiveDyn liveStorage 1 .none) start
+  check (result.isOk && queried.machine.user == ["sizedness"])
+    "storage live retains state from its live compiler query"
+  let missingStorage := {storage with veryTriviallySized := fun _ => blocked "sizedness unavailable"}
+  let (rejected,result) := MachineHooks.run (MachineHooks.storageLiveDyn missingStorage 1 .none) start
+  let some beforeFrame := start.stack.currentFrame? | throw (IO.userError "initial frame")
+  let some rejectedFrame := rejected.stack.currentFrame? | throw (IO.userError "rejected frame")
+  check (result == .error (.unsupported "sizedness unavailable") && rejectedFrame.locals == beforeFrame.locals)
+    "failed sizedness query does not install local storage"
   let (state, result) := MachineHooks.run (MachineHooks.storageLiveDyn storage 1 .none) start
   check result.isOk "storage live"
   let some current := state.stack.currentFrame? | throw (IO.userError "frame")

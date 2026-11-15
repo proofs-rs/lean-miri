@@ -45,6 +45,9 @@ def environmentMemory [DecidableEq MiriMemoryKind]
       diagnostic nativeDrop pointer old kind
   let arrays : RuntimeArrayQueries.Access
       (EvalHostRuntimeConstruction.RuntimeState (InnerControl Os R P H D O Aff B Host)) := {
+    sourceCompiler := EvalPointerSource.arrays.sourceCompiler.map fun source => {
+      get := fun state => source.get state.machine
+      put := fun state compiler => {state with machine := source.put state.machine compiler} }
     get := fun state => EvalPointerSource.arrays.get state.machine
     set := fun state world => {state with machine := EvalPointerSource.arrays.set state.machine world} }
   return {

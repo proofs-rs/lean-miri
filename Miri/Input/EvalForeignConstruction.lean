@@ -141,7 +141,7 @@ def common (p : CompilerProviders.Prepared) (options : Options)
   pure {
     options,maximumSize := allocation.maximumObjectSize.bytes,symbols,native := host
     expectedAbi := fun signature => query (CompilerShimAbi.expectedAbi abi signature)
-    argumentCompat := (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat choice
+    argumentCompat := (CompilerCallConstruction.argumentCompat p options.compatibilityBudget) choice
     forceAllocation := fun dest => do
       let memory ← Miri.Interpreter.forceAllocation place choice dest
       pure ⟨.memory memory.mplace,memory.layout⟩

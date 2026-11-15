@@ -30,6 +30,12 @@ structure Leaves (Os R P H D O Aff B Host C : Type) where
   nativeHost : Option (CompilerNativeSignatures.Host MiriMemoryKind (Control Os R P H D O Aff B Host) C)
 
 def arrays : RuntimeArrayQueries.Access (Machine Os R P H D O Aff B Host) where
+  sourceCompiler := some {
+    get := fun machine => machine.user.payload.payload.user.sourceCompiler
+    put := fun machine compiler => {machine with user := {machine.user with payload :=
+      {machine.user.payload with payload := {machine.user.payload.payload with user :=
+        {machine.user.payload.payload.user with sourceCompiler := some compiler}}}}} }
+
   get := fun machine => machine.user.payload.payload.user.types
   set := fun machine types => {machine with user := {machine.user with payload :=
     {machine.user.payload with payload := {machine.user.payload.payload with user :=

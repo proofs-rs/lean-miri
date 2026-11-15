@@ -103,11 +103,7 @@ private def timeDispatch
     expectedAbi := fun name _ => CompilerNamedShimAbi.query p.namedAbi name
     systemConvention := (CompilerNamedShimAbi.query p.namedAbi "GetSystemTimeAsFileTime").map (·.conv)
     argumentCompat := fun caller callee => ExecutionStateTransport.action do
-      let compiler : ExecutionCallLeaves.Compiler
-          (CoreState Os R H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
-          C ABI.ExternAbi :=
-        CompilerCallConstruction.compiler p assembly.compatibilityBudget
-      compiler.checkArgumentCompat context.choice caller callee
+      CompilerCallConstruction.argumentCompat p assembly.compatibilityBudget context.choice caller callee
     checkSymbolClash := fun name =>
       ExecutionStateTransport.action (assembly.foreign.checkSymbolClash name)
     transmute := fun operand target => do

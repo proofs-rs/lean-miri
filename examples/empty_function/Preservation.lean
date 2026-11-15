@@ -151,7 +151,7 @@ def SelectedProjectedContents (s : Static) (p : Packet) (after : State) : Prop :
       | .dead => False
       | .live (.indirect memory) => current.value = .live (.indirect memory)
       | .live (.immediate value) =>
-        ∃ layout, Nonempty (InputDraft.LocalMetadata s original localId layout) ∧
+        ∃ layout, Nonempty (InputDraft.LocalMetadata s p.before original localId layout) ∧
           ∃ memory id tag entry base expected,
             current.value = .live (.indirect memory) ∧
             memory.ptr.provenance = some (.concrete id tag) ∧

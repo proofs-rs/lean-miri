@@ -193,17 +193,32 @@ relocations therefore resolve through a complete source→runtime map. A failure
 returns all IDs already consumed by the source allocation-ID supply. -/
 def importGraph [DecidableEq K] (target : RuntimeTargetDataLayout)
     (definitions : Array DefinitionId) (queries : Queries) (nodes : Array AllocationNode)
-    (initial : MemoryState P E K) : ImportResult P E K := Id.run do
+    (initial : MemoryState P E K)
+    (reserveSource : Option (MemoryState P E K → AllocationNode →
+      MemoryState P E K × Except String AllocId) := none) : ImportResult P E K := Id.run do
   let mut memory := initial
   for node in nodes do
     let (kind, size, align, mutable) ← match metadata target queries node with
       | .ok value => pure value
       | .error e => return ⟨memory, .error e⟩
-    let registered := MemoryLifecycle.registerImportedGlobal memory () node.id kind size align mutable
-    memory := registered.memory
-    match registered.outcome with
-    | .error e => return ⟨memory, .error (toString e)⟩
-    | .ok _ => pure ()
+    if let some reserveSource := reserveSource then
+      let (updated,result) := reserveSource memory node
+      memory := updated
+      let id ← match result with
+        | .ok id => pure id
+        | .error error => return ⟨memory,.error error⟩
+      let (updated,result) := memory.registerReservedGlobal node.id
+        ⟨id,kind,size,align,mutable,none⟩
+      memory := updated
+      match result with
+      | .error error => return ⟨memory,.error (toString error)⟩
+      | .ok () => pure ()
+    else
+      let registered := MemoryLifecycle.registerImportedGlobal memory () node.id kind size align mutable
+      memory := registered.memory
+      match registered.outcome with
+      | .error e => return ⟨memory, .error (toString e)⟩
+      | .ok _ => pure ()
   let mut initializers := #[]
   for node in nodes do
     let id ← match runtimeId memory node.id with

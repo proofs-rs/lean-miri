@@ -291,6 +291,7 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
   for row in q.covariance do
     checkId b.types row.sourceType "$.compiler_covariance_queries" "type"
     checkId b.types row.targetType "$.compiler_covariance_queries" "type"
+  q.globalBytes.validateAvailability
   checkId b.types q.globalBytes.strType "$.compiler_global_byte_queries.str_type" "type"
   for id in q.globalBytes.coveredAllocations do checkId b.allocations id "$.compiler_global_byte_queries.covered_allocations" "allocation"
   for row in q.globalBytes.candidates do
@@ -404,8 +405,8 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
       if kind == 0 then
         let some body := document.bodies[id]? | throw "required body is absent"
         for constant in body.requiredConsts do
-          let .Val value _ := constant.value
-          pending := pending ++ (valueAllocations value).map (2, ·)
+          if let .Val value _ := constant.value then
+            pending := pending ++ (valueAllocations value).map (2, ·)
         for call in body.callEvidence do
           if let some call := call then
             if let some inst := call.instanceId then pending := pending.push (1, inst)
@@ -563,8 +564,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
             | _ => throw s!"{path}: LLVM evidence does not belong to a call"
           let operandType ← match operand with
             | .Constant constant =>
-              let .Val _ ty := constant.value
-              pure ty
+              pure constant.value.typeId
             | .Copy place | .Move place => do
               let some facts := (value.nodeFacts[blockIndex]?).bind (·.back?) |
                 throw s!"{path}: LLVM callee place has no terminator facts"

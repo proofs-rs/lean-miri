@@ -1,3 +1,5 @@
+import Miri.Input.SourceCompilerInstances
+import Miri.Input.SourceCompilerWorldAbi
 import Miri.Input.CompilerPanicFacts
 import Miri.Input.CompilerLifecyclePipeline
 import Miri.Input.CompilerFunctionFacts
@@ -145,55 +147,69 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
   match query with
   | .ok value => pure value | .error error => throw (.unsupported error)
 
-/-- Resolve the exact compiler FnDef request at the current canonical source
-terminator. Original request identity is distinct from the resolved method/shim
-identity; trait methods may resolve to an implementation with a different DefId.
--/
-def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.GenericArg) :
-    MachineHooks.M K User CallInstance := do
+/-- Validate the original request against the executing body's typed operand,
+then demand free Item identity in the current World. No call-site resolution
+answer supplies a winner; trait/associated selection remains Unsupported. -/
+def resolveCurrent (access : SourceCompilerWorld.Access (MachineHooks.State K User))
+    (definition : MIR.DefId) (args : Array MIR.GenericArg) : MachineHooks.M K User CallInstance := do
   let frame ← MachineHooks.currentFrame
   let .mir location := frame.location | throw (.invalidProgram "callee resolution outside a MIR source location")
-  let body ← lift do
-    let some body := p.program.bundle.bodies[frame.bodyIdentity.index]? | throw "missing canonical source body"
-    unless body.body == frame.body do throw "callee resolution canonical body/content mismatch"
-    let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
-    unless loaded.identity == frame.bodyIdentity do throw "callee resolution current full-instance/body mismatch"
-    pure body
+  let some world := access.get (← get) | throw (.unsupported "source compiler World is unavailable")
+  let body ← lift (SourceCompilerBodies.frameBody world frame.functionInstance frame.bodyIdentity)
+  unless body.body == frame.body do throw (.invalidProgram "callee resolution canonical body/content mismatch")
   let some block := body.body.basicBlocks[location.block]? | throw (.invalidProgram "callee resolution source block absent")
   unless location.statementIndex == block.statements.size do
     throw (.invalidProgram "callee resolution does not refer to a source terminator")
-  lift do
-    let resolution ← CallResolution.atSite p.lifecycle.calls.calls ⟨frame.bodyIdentity.index,location.block⟩
-    let some ty := resolution.source.functionType | throw "original call function type is absent"
-    match ← CompilerFunctionFacts.kind p.functions ty with
-    | .FnDef expected expectedArgs =>
-      unless definition == expected && args == expectedArgs do throw "original compiler FnDef request differs from current source call"
-    | _ => throw "static instance resolution requested for an indirect compiler call"
-    pure resolution.callee
+  let function ← match block.terminator.kind with
+    | .Call function .. | .TailCall function .. => pure function
+    | _ => throw (.invalidProgram "callee resolution current source is not a call")
+  let typeId ← match function with
+    | .Constant constant =>
+      pure constant.value.typeId
+    | .Copy place | .Move place =>
+      if place.projection.isEmpty then
+        let some typeId := body.body.locals[place.localId]? | throw (.unsupported "source function local type absent")
+        pure typeId
+      else do
+        let some blockFacts := body.input.nodeFacts[location.block]?
+          | throw (.unsupported "source projected function block facts absent")
+        let some facts := blockFacts[location.statementIndex]?
+          | throw (.unsupported "source projected function place facts absent")
+        let candidates := facts.places.filter (·.place == place)
+        unless candidates.size == 1 do throw (.unsupported "source projected function type missing or ambiguous")
+        let some fact := candidates[0]? | throw (.unsupported "source projected function type absent")
+        pure fact.typeId
+    | _ => throw (.unsupported "source callable operand kind unsupported")
+  let some type := world.canonical.types[typeId]? | throw (.unsupported "source FnDef type absent")
+  unless type.id == typeId do throw (.unsupported "source FnDef type identity mismatch")
+  let .functionDefinition expected expectedArgs _ _ := type.shape
+    | throw (.unsupported "static instance resolution requires source FnDef")
+  unless definition == expected && args == expectedArgs do
+    throw (.invalidProgram "FnDef request differs from current source call")
+  SourceCompilerInstances.itemInstance access definition args
 
 /-- Concrete ExternAbi keeps source ABI/unwind identity separate from FnAbi's
 canonical target convention. All full-callee hooks use the final shared tables.
 The explicit base config retains physical memory/host/platform capabilities. -/
 def executionHooks (p : Prepared) (image : AllocationImage.Imported)
+    (world : SourceCompilerWorld.Access (MachineHooks.State K User))
     (vtableEngine : VTableMachine.Hooks K User Other) (userRelevantCrates : Array Nat)
     (base : ExecutionMachine.Config K User C Other ABI.ExternAbi Host) :
     ExecutionMachine.Config K User C Other ABI.ExternAbi Host :=
   let functions := CompilerFunctionPointers.hooks p.pointers image base.functions
   let vtableEngine := {vtableEngine with functions}
   let callCompiler := {base.calls.compiler with
-    resolve := fun _ definition args => resolveCurrent p definition args
-    functionSignature := fun _ layout => lift do
-      let (count,abi) ← CompilerFunctionFacts.signature p.functions layout.ty
-      pure (count, abi)
-    functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
-    fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
-    fnAbiOfInstance := fun _ callee extra =>
-      match CompilerInstanceAbi.abiOfInstance p.lifecycle.instances callee extra with
-      | .ok abi => pure abi
-      | .error error => throw (.invalidProgram error)}
-  let dispatch := {base.calls.dispatch with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls callee}
+    instanceKind := SourceCompilerInstances.instanceKind world
+    instanceArgs := SourceCompilerInstances.instanceArgs world
+    itemInstance := SourceCompilerInstances.itemInstance world
+    resolve := fun _ definition args => resolveCurrent world definition args
+    functionSignature := fun _ layout => SourceCompilerWorld.demandFunctionSignature world layout.ty
+    functionKind := fun ty => SourceCompilerInstances.functionKind world ty
+    fnAbiOfFnPtr := fun _ layout extra => SourceCompilerWorld.demandFunctionPointerAbi world layout.ty extra
+    fnAbiOfInstance := fun _ callee extra => SourceCompilerWorld.demandInstanceAbi world callee extra}
+  let dispatch := {base.calls.dispatch with loadMir := fun _ callee => CompilerCallPipeline.loadMir world callee}
   let calls := {base.calls with compiler := callCompiler, dispatch}
-  let helpers := {base.helpers with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls callee}
+  let helpers := {base.helpers with loadMir := fun _ callee => CompilerCallPipeline.loadMir world callee}
   let facts := p.lifecycle.calls.symbols.facts.context
   CompilerExecutionFacts.hooks p.intrinsics {base with
     functions, calls, helpers
@@ -203,7 +219,7 @@ def executionHooks (p : Prepared) (image : AllocationImage.Imported)
     usizeLayout := fun _ => lift (p.primitiveLayout "usize")
     pointeeLayout := fun _ ty => lift do
       p.runtime.lookup (← CompilerFacts.requiredType facts ty "builtin_deref_explicit") |>.mapError toString
-    lifecycle := CompilerLifecyclePipeline.lifecycleHooks p.lifecycle userRelevantCrates base.lifecycle
+    lifecycle := CompilerLifecyclePipeline.lifecycleHooks p.lifecycle world userRelevantCrates base.lifecycle
     virtual := CompilerVTableMachine.virtualLeaves p.vtables image vtableEngine base.virtual
     casts := {base.casts with
       vtableType := VTable.getPtrVTableType (CompilerVTableMachine.vtableHooks p.vtables image vtableEngine base.virtual.vtable)

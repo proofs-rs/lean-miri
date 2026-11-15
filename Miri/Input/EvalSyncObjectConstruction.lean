@@ -180,6 +180,9 @@ def sourceEnvironmentMemory [DecidableEq MiriMemoryKind]
         (EvalStartupMemoryConstruction.InnerControl Os R Payload H D
           (EvalConfigurationCore.SourceOther Raw Listener TcpStream Error) Aff B
           (EvalConfigurationCore.SourceHost Poll Instant System H D Raw Listener TcpStream Error Native Profiler))) := {
+    sourceCompiler := EvalPointerSource.arrays.sourceCompiler.map fun source => {
+      get := fun state => source.get state.machine
+      put := fun state compiler => {state with machine := source.put state.machine compiler} }
     get := fun state => EvalPointerSource.arrays.get state.machine
     set := fun state world => {state with machine := EvalPointerSource.arrays.set state.machine world} }
   return {

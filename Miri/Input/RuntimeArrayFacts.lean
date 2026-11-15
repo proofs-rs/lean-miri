@@ -54,8 +54,8 @@ def opsemInhabited (context : CompilerFacts.Context) (world : RuntimeArrayTypes.
 
 def retagHooks (access : RuntimeArrayQueries.Access (MachineHooks.State K U))
     (context : CompilerFacts.Context) (base : TypedRetag.Hooks K U) : TypedRetag.Hooks K U :=
-  let constructed := fun ty => do return (access.get (← get)).entries.any (·.value.ty == ty)
-  let traitQuery := fun ty key => do lift (boolean context (access.get (← get)) ty key)
+  let constructed := fun ty => do return (← RuntimeArrayQueries.current access).entries.any (·.value.ty == ty)
+  let traitQuery := fun ty key => do lift (boolean context (← RuntimeArrayQueries.current access) ty key)
   {base with
     typeShape := fun ty => do
       if ← constructed ty then return ⟨false,false,false,false⟩

@@ -1,4 +1,6 @@
+import Miri.Input.SourceCompilerConstantRequests
 import Miri.Input.EvalConfiguration
+import Miri.Input.SourceCompilerAllocations
 import Miri.Interpreter.NativeAllocationLifecycle
 import Miri.Interpreter.MemoryErrors
 import Miri.Interpreter.LeakCheck
@@ -59,6 +61,42 @@ abbrev User := EvalCoreMachine.User
 abbrev State := EvalCoreMachine.State
 abbrev Stored := EvalCoreMachine.Stored
 abbrev M Os R P H D O Aff B Host A := MachineHooks.M MiriMemoryKind (User Os R P H D O Aff B Host) A
+/-- Constant operands use the same evaluation-local compiler World as body and
+ABI demands. Source allocation imports retain their actual memory/error effects. -/
+def constantOperand [DecidableEq K] (runtime : RuntimeMetadata) (sourceRequired : Bool)
+    (worldAccess : SourceCompilerWorld.Access (MachineHooks.State K U))
+    (functions : FunctionPointers.Hooks K U Other) (arithmetic : PointerArithmetic)
+    (external : DefId → MachineHooks.M K U (Pointer Provenance))
+    (constant : ConstOperand) (known : Option LocalLayout)
+    (checkKnown : Option (LocalLayout → LocalLayout → MachineHooks.M K U Bool)) :
+    MachineHooks.M K U (OpTy Provenance) := do
+  let constant ← SourceCompilerConstantRequests.consume worldAccess constant
+  let state ← get
+  let runtime ← match worldAccess.get state with
+    | some world => do
+      if world.canonical.sourceMaterial.isSome then
+        let root := match constant.value with
+          | .Val (.Slice allocation _) _ | .Val (.Indirect allocation _) _ => some allocation
+          | .Val (.Scalar (.Ptr (.Allocation allocation _ _ _))) _ => some allocation
+          | _ => none
+        if let some root := root then
+          let imported ← match SourceCompilerAllocations.importDemanded runtime.target world root state.machine.memory with
+            | .ok result => pure result
+            | .error reason => throw (.unsupported reason)
+          set {state with machine := {state.machine with memory := imported.memory}}
+          match imported.outcome with
+          | .ok _ => pure ()
+          | .error reason => throw (.unsupported reason)
+        pure {runtime with source := world.canonical}
+      else pure runtime
+    | none => do
+      if sourceRequired then
+        throw (.unsupported "constant query requires the shared source compiler World")
+      pure runtime
+  ConstantMachine.evalOperandWithLayout runtime functions arithmetic external
+    MemoryErrors.constant constant known checkKnown
+
+
 structure PlaceOptions where
   debugAssertions : Bool
   dynamicFuel : Nat
@@ -359,6 +397,9 @@ def environmentMemoryFromCore [DecidableEq MiriMemoryKind]
   let arrays : RuntimeArrayQueries.Access
       (EvalHostRuntimeConstruction.RuntimeState
         (ValidityMachine.Control (Stored Os R P H D O Aff B Host))) := {
+    sourceCompiler := EvalPointerSource.arrays.sourceCompiler.map fun source => {
+      get := fun state => source.get state.machine
+      put := fun state compiler => {state with machine := source.put state.machine compiler} }
     get := fun state => EvalPointerSource.arrays.get state.machine
     set := fun state types => {state with machine := EvalPointerSource.arrays.set state.machine types} }
   let deallocate := fun pointer old kind =>
@@ -435,7 +476,10 @@ def makeWithForeignContext {Assembly : Type}
     let allocation := {allocation with
       allocationBacktrace := if options.collectLeakBacktraces then some (fun id kind => do
         unless LeakCheck.mayLeak kind do
-          let trace ← match CompilerAllocationBacktrace.collect p (← get).stack.frames with
+          let state ← get
+          let some world := EvalCoreMachine.sourceCompilerAccess.get state
+            | throw (.unsupported "allocation backtrace requires the shared compiler World")
+          let trace ← match CompilerAllocationBacktrace.collect world state.stack.frames with
             | .ok trace => pure trace
             | .error reason => throw (.unsupported s!"compiler allocation backtrace: {reason}")
           let state ← get
@@ -457,7 +501,7 @@ def makeWithForeignContext {Assembly : Type}
       match EvalProjectionMachine.memoryOffset pointers (← get) place amount mode metadataValue with
       | .ok value => pure value
       | .error error => throw (IntrinsicVectorMachine.projectionError error)
-    let table := CompilerVTableLeaves.make p image engine memoryOffset
+    let table := CompilerVTableLeaves.make p image EvalCoreMachine.sourceCompilerAccess engine memoryOffset
     let nested : Unit → Except StepError (ExecutionMachine.Config MiriMemoryKind (User Os R P H D O Aff B Host) C O ABI.ExternAbi ClockHost) := fun _ =>
       (makeWithForeignContext p image bytes options leaves choice sourceHostConfiguration foreignBuilder remaining).map Prod.fst
     let validate := fun c place => do
@@ -465,27 +509,27 @@ def makeWithForeignContext {Assembly : Type}
       | .error error => throw error
       | .ok config => ValidityMachine.validateRuntime config.validity c options.limits.validation place true
     let compiler := EvalPlaceConstruction.compiler p placeOptions access pointers table
-      (CompilerPlaceTypes.place p options.place.debugAssertions covariance) validate
+      (CompilerPlaceTypes.place p EvalCoreMachine.sourceCompilerAccess options.place.debugAssertions covariance) validate
     let projection := EvalPlaceConstruction.projection p placeOptions access allocation compiler table
-    let pointerCompiler := CompilerExecutionProviders.pointerCompiler facts
+    let pointerCompiler := CompilerExecutionProviders.pointerCompiler facts EvalCoreMachine.sourceCompilerAccess
     let dereference := PointerPlaceMachine.dereference access pointerCompiler projection.dynamic table projection.dynamicFuel
     let operands : OperandMachine.Hooks MiriMemoryKind (User Os R P H D O Aff B Host) C := {
       compiler,projection
       layoutCompatible := compatibility
-      checkPlaceType := CompilerPlaceTypes.operand p options.place.debugAssertions covariance
+      checkPlaceType := CompilerPlaceTypes.operand p EvalCoreMachine.sourceCompilerAccess options.place.debugAssertions covariance
       dereference
       runtimeChecks := CompilerScalarLeaves.runtimeChecks p
       boolLayout := CompilerScalarLeaves.boolLayout p
       constant := fun _ constant known =>
-        ConstantMachine.evalOperandWithLayout p.runtime functions pointers.arithmetic
-          externStatic MemoryErrors.constant constant known
+        constantOperand p.runtime p.program.input.sourceMaterial.isSome EvalCoreMachine.sourceCompilerAccess
+          functions pointers.arithmetic externStatic constant known
           (if options.place.debugAssertions then some (fun computed expected => physical (compatibility computed expected)) else none) }
     let callBackend : CallDispatchMachine.Backend (State Os R P H D O Aff B Host) := {
       selection := fun state => do
         match ← EvalBackendMachine.handler state.machine with
         | .none => pure .none
         | .vclocks _ => pure .vclocks }
-    let retag := EvalRetagMachine.hooks facts p.lifecycle.calls.runtime (CompilerRetagOptions.make p options.retag) access projection table pointers choice
+    let retag := EvalRetagMachine.hooks facts p.lifecycle.calls.runtime EvalCoreMachine.sourceCompilerAccess (CompilerRetagOptions.make p options.retag) access projection table pointers choice
     let scalarQueries := CompilerScalarLeaves.scalar p
     let floats : FloatOpsHooks Provenance (State Os R P H D O Aff B Host) C := {
       integerKindOf := fun _ ty => physical (CompilerExecutionProviders.integerKind context ty)
@@ -502,14 +546,14 @@ def makeWithForeignContext {Assembly : Type}
         | throw (.invalidProgram "pointee layout requested for a non-pointer type")
       query (CompilerFacts.layoutOf context pointee)
     let scalar := ExecutionScalar.hooks scalarQueries access pointers.arithmetic isRaw usize pointeeLayout dereference floats
-    let discrQueries := CompilerScalarLeaves.discriminant p (fun _ => ValidityMachine.scalarMayBeNull)
+    let discrQueries := CompilerScalarLeaves.discriminant p EvalCoreMachine.sourceCompilerAccess (fun _ => ValidityMachine.scalarMayBeNull)
     let discr := discriminant discrQueries access operands
-    let validity := EvalValidityMachine.hooks facts p.lifecycle.calls.runtime
+    let validity := EvalValidityMachine.hooks facts p.lifecycle.calls.runtime EvalCoreMachine.sourceCompilerAccess
       (CompilerValidityLeaves.make p image EvalProjectionMachine.arrays projection pointers)
       access allocation compiler projection (FunctionPointerConsumers.vtable functions table) discr pointers retag options.limits.retag
-    let copy := CompilerCopy.hooks p.runtime options.place.debugAssertions compatibility access
+    let copy := CompilerCopy.hooks p.runtime EvalCoreMachine.sourceCompilerAccess options.place.debugAssertions compatibility access
       PointerMachine.User.addresses pointers.arithmetic validity options.limits.validation
-    let castQueries := CompilerCastLeaves.make p (CompilerCastQueries.required p) table
+    let castQueries := CompilerCastLeaves.make p EvalCoreMachine.sourceCompilerAccess (CompilerCastQueries.required p EvalCoreMachine.sourceCompilerAccess) table
       (fun _ provenance => PointerMachine.exposeProvenance pointers provenance)
       (fun _ address => PointerMachine.pointerFromExposedAddress pointers address)
       (fun value layout => EvalProjectionMachine.assertAbi p.runtime.target value layout |>.mapError IntrinsicVectorMachine.projectionError)
@@ -528,8 +572,8 @@ def makeWithForeignContext {Assembly : Type}
         let helper := ExecutionCalls.helpers config.helpers (ExecutionMachine.callHooks config options.limits)
         FunctionCalls.callFunction helper c callee ABI.ExternAbi.Rust args none continuation
     let unwind := EvalCallRuntime.unwind access projection functions options.panicUnwinds callFunction
-    let lifecycle := CompilerCallConstruction.lifecycle p options.userRelevantCrates
-      (CompilerStorage.hooks p allocation projection.dynamic projection.dynamicFuel choice deallocateStack)
+    let lifecycle := CompilerCallConstruction.lifecycle p EvalCoreMachine.sourceCompilerAccess options.userRelevantCrates
+      (CompilerStorage.hooks p EvalCoreMachine.sourceCompilerAccess allocation projection.dynamic projection.dynamicFuel choice deallocateStack)
       EvalConfiguration.identity unwind
     let ⟨math⟩ ← liftConstruction (EvalMathMachine.hooks p (EvalMathMachine.optionalHost leaves.math) leaves.mathError none access projection.place scalar floats returnToBlock)
     let atomics := ExecutionIntrinsic.Atomic.access {
@@ -633,7 +677,7 @@ def makeWithForeignContext {Assembly : Type}
         variantCount := intrinsicQueries.variantCount
         callerLocationConstant := EvalCallerLocationConstruction.hook p functions
           (VirtualCalls.callerLocation (ExecutionCalls.virtualHooks
-            (CompilerCallConstruction.virtual p table PointerPlaceMachine.controlledAlignment)
+            (CompilerCallConstruction.virtual p EvalCoreMachine.sourceCompilerAccess table PointerPlaceMachine.controlledAlignment)
             access operands options.place.debugAssertions)
             options.limits.callDispatch)
           (fun ty => CompilerFacts.builtinDeref context ty true)
@@ -650,14 +694,15 @@ def makeWithForeignContext {Assembly : Type}
     let llvm := fun callee => query (EvalArchitectureMachine.compilerDispatcher context p.intrinsics pointers
       leaves.checkLlvmSymbolClash math access projection (intrinsics callee).simdHooks (fun name os => .unsupported s!"unsupported foreign item {name} on {os}"))
     let ⟨rootSpan⟩ ← liftConstruction (pureQuery (CompilerContextSpan.rootSpan p.program))
-    let ⟨helpers⟩ ← liftConstruction (pureQuery (CompilerCallConstruction.helpers p rootSpan (CompilerSignatureAbi.hook p)))
+    let ⟨helpers⟩ ← liftConstruction (pureQuery (CompilerCallConstruction.helpers p
+      EvalCoreMachine.sourceCompilerAccess rootSpan (CompilerSignatureAbi.hook p)))
     let config : ExecutionMachine.Config MiriMemoryKind (User Os R P H D O Aff B Host) C O ABI.ExternAbi ClockHost := {
       access,allocation,compiler,projection,copy,retag,validity,lifecycle,functions,atomics,varArgs,intrinsics,floats
       operands := ⟨operands.checkPlaceType,operands.dereference,operands.runtimeChecks,operands.boolLayout,operands.constant⟩
       validationRecursive := fun _ _ => ValidityMachine.enforceValidityRecursively
-      calls := CompilerCallConstruction.leaves p options.compatibilityBudget
+      calls := CompilerCallConstruction.leaves p EvalCoreMachine.sourceCompilerAccess options.compatibilityBudget
         (foreignOverride.orElse fun _ => leaves.foreign.map pure) callBackend leaves.dynSymName llvm
-      virtual := CompilerCallConstruction.virtual p table PointerPlaceMachine.controlledAlignment
+      virtual := CompilerCallConstruction.virtual p EvalCoreMachine.sourceCompilerAccess table PointerPlaceMachine.controlledAlignment
       helpers := helpers
       control := ⟨CompilerBodySpan.get p⟩
       panic := EvalCallRuntime.panic p
@@ -1160,7 +1205,7 @@ def makeFromSourcePackage [DecidableEq Os]
             virtual := callbacks.socket.virtual.source
             expectedAbi := fun name => CompilerNamedShimAbi.query p.namedAbi name
             argumentCompat := fun caller callee =>
-              (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+              (CompilerCallConstruction.argumentCompat p options.compatibilityBudget)
                 selectedChoice caller callee
             checkSymbolClash := baseCore.checkSymbolClash
             transmute := fun operand target => do
@@ -1188,7 +1233,7 @@ def makeFromSourcePackage [DecidableEq Os]
             pollAndUnblockZero
             pollAbi := CompilerNamedShimAbi.query p.namedAbi "poll"
             argumentCompat := fun caller callee =>
-              (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+              (CompilerCallConstruction.argumentCompat p options.compatibilityBudget)
                 selectedChoice caller callee
             checkSymbolClash := baseCore.checkSymbolClash
             transmute := fun operand target => do
@@ -1360,7 +1405,7 @@ def makeFromSourcePackage [DecidableEq Os]
                 expectedAbi := fun name _signature => CompilerNamedShimAbi.query p.namedAbi name
                 systemConvention := pure .C
                 argumentCompat := fun caller callee =>
-                  (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+                  (CompilerCallConstruction.argumentCompat p options.compatibilityBudget)
                     selectedChoice caller callee
                 checkSymbolClash := baseCore.checkSymbolClash
                 transmute := fun operand target => do
@@ -1535,7 +1580,7 @@ def makeFromSourcePackage [DecidableEq Os]
                     (SourceOther Raw Listener TcpStream Error) Native Profiler)
                 let strings := EvalUnixFsConstruction.osStringsFromSource
                   sourceLeaves.foreignSource.host.os fsMemory
-                let metadata ← match EvalUnixFsConstruction.metadataFromSource p
+                let metadata ← match EvalUnixFsConstruction.metadataFromSource p EvalCoreMachine.sourceCompilerAccess
                     context.validityAccess context.projection selectedChoice strings
                     fsCapability.pathFromOs seed.errors seed.registry.readiness files
                     (fun other => do return .inl (← files.hostMetadata (.other other)))
@@ -1615,7 +1660,7 @@ def makeFromSourcePackage [DecidableEq Os]
                   directories, times, temporary
                   expectedAbi := fun symbol _signature => CompilerNamedShimAbi.query p.namedAbi symbol
                   argumentCompat := fun caller callee =>
-                    (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+                    (CompilerCallConstruction.argumentCompat p options.compatibilityBudget)
                       selectedChoice caller callee
                   checkSymbolClash := assembly.foreign.toCore.checkSymbolClash
                   transmute := fun operand target => do

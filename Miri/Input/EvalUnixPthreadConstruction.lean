@@ -225,7 +225,7 @@ def fromSource [DecidableEq MiriMemoryKind]
       let target ← PointerPlaceMachine.withMetadata access pointer metadata layout false
       writePlaceImmediate place choice (.scalar scalar) ⟨.memory target.mplace,layout⟩ }
   let pthread := TimeShimMachine.bindPthread clock base
-  let compat := CompilerCallConstruction.compiler p compatibilityBudget
+  let checkArgumentCompat := CompilerCallConstruction.argumentCompat p compatibilityBudget
   let dispatch : PthreadDispatch.Hooks (ValidityMachine.State MiriMemoryKind U)
       TypedSyncRuntime.Ref Clock.Duration := {
     pthread
@@ -234,7 +234,7 @@ def fromSource [DecidableEq MiriMemoryKind]
       match CompilerShimAbi.expectedAbi p.lifecycle.shim signature with
       | .ok abi => pure abi
       | .error reason => throw (.unsupported s!"compiler pthread shim ABI: {reason}")
-    argumentCompat := fun caller callee => compat.checkArgumentCompat choice caller callee
+    argumentCompat := fun caller callee => checkArgumentCompat choice caller callee
     checkSymbolClash := leaves.checkSymbolClash
     transmute := fun operand target => do
       let projection ← place.projection choice

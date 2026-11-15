@@ -202,6 +202,8 @@ deriving instance DecidableEq for Miri.Interpreter.DeadlineMachine.Registry
 deriving instance DecidableEq for Miri.Interpreter.ReadinessMachine.Registry
 deriving instance DecidableEq for Miri.Input.HostRuntime.Storage
 deriving instance DecidableEq for Miri.Interpreter.RaceMode.Selection
+deriving instance DecidableEq for Miri.Input.ImportDocument
+deriving instance DecidableEq for Miri.Input.SourceCompilerWorld.World
 deriving instance DecidableEq for Miri.Input.EvalWorld.World
 
 #synth DecidableEq (KeyedArray UInt64 AllocId (fun (id : AllocId) => id.value))

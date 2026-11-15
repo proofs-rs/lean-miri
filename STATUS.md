@@ -11,7 +11,59 @@ and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.
 
-## Exported input coverage
+## Finite-material compiler query migration
+
+This branch is replacing precomputed compiler-query answers with finite,
+typed source material in one evaluation-local Lean World. The exporter retains
+uninstantiated MIR bodies, exact definition and generic identities, target
+data and other primitive facts. The normal runner derives supported body,
+type, layout, ABI and call facts on demand through pure Lean functions before
+the fixed interpreter consumes them. It does not launch rustc during execution
+or share a cache between runs. The old snapshot route still exists while this
+migration is incomplete.
+
+Concrete constants used by a run are a deliberate trusted-input exception:
+the producing rustc evaluates syntactically observed, fully concrete scalar
+or unit constants and exports the result with its full source key. Lean parses
+that into typed rows, substitutes the caller key on demand and rejects missing
+results. The exporter rejects the whole document if constant evaluation
+changes its allocation identity snapshot. It does not enumerate generic
+substitutions; dynamic keys, promoted constants and aggregate or pointer
+results remain unsupported. The scalar witness and compiler's CTFE are in the
+trust boundary, and allocation/provenance equivalence for broader results is
+unproved.
+
+A genuine no_std program using `<u64 as SizedTypeProperties>::SIZE` now passes
+the normal runner through typed decode, World construction, demand-time value
+lookup and the fixed interpreter to `finalized_exit` code 1 (choice cursor
+305). Removing that witness makes the same program stop at the actual demand
+with Unsupported. This is finite execution evidence, not a proof of safety or
+general completeness. Ordinary std main still cannot be exported and run
+end-to-end: its latest genuine producer export passes bound function-pointer,
+outlives, type-level constant source, `UbChecks` and `Assert`, then stops at an
+`assume` statement. The matching Lean consumers are still under integration. A
+genuine `Result<u64, u64>` run has passed constant-span, pure discriminant
+lookup and synthetic tag-field projection, and currently stops at unsupported
+nominal enum validity classification. Further physical/ABI coverage remains in
+progress. The examples proof
+closure is being updated to carry the actual World and query evidence. Its
+current frame evidence assumes `sourceMaterial = none`, so it covers the legacy
+fixture only; it does not prove the new source-material execution route. Local
+kernel lemmas do not yet establish a whole-program theorem. In six alternating
+fixed-CPU trials of this same Rust program, frozen old-main/schema-12 and
+current work-in-progress foundation runners had identical exits and choice
+tapes. Median wall time was 237.93 ms versus 267.55 ms, concentrated in
+typed decode (26.25 versus 62.07 ms); ranges overlapped. The payloads and
+binaries differ, so this is a whole-route comparison, not a same-input
+algorithm speedup. The work-in-progress binary is identified by its artifact
+hash in ignored measurement output, not by a source commit. The measured
+foundation decoder made a redundant pass through the old decoder; its dispatch
+has been changed after that measurement and has not yet been remeasured.
+
+## Existing schema-12 input coverage
+
+This section describes the retained concrete-instance snapshot route. Its
+query tables and completeness claims do not apply to finite source material.
 
 Each concrete instance and promoted index has one executable MIR body. The
 exporter substitutes generic arguments, normalizes types, and evaluates MIR

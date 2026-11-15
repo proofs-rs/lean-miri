@@ -12,6 +12,16 @@ abbrev User Os R P H D O Aff B Host := ExecutionStateTransport.Inner (EvalWorld.
 abbrev Machine Os R P H D O Aff B Host := MachineHooks.MachineState MiriMemoryKind (User Os R P H D O Aff B Host)
 abbrev State Os R P H D O Aff B Host := MachineHooks.State MiriMemoryKind (User Os R P H D O Aff B Host)
 
+/-- Compiler queries in the inner execution state use the same World as the
+outer source state after transport. -/
+def sourceCompilerAccess : SourceCompilerWorld.Access (State Os R P H D O Aff B Host) where
+  get := fun state => state.machine.user.payload.payload.user.sourceCompiler
+  put := fun state compiler =>
+    {state with machine := {state.machine with user := {state.machine.user with payload :=
+      {state.machine.user.payload with payload := {state.machine.user.payload.payload with user :=
+        {state.machine.user.payload.payload.user with sourceCompiler := some compiler}}}}}}
+
+
 def handler (m : Machine Os R P H D O Aff B Host) : Except StepError (RaceMode.Handler B) := do
   match m.user.payload.payload.user.backend with
   | .none =>

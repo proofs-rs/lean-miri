@@ -1,3 +1,5 @@
+import Miri.Input.SourceCompilerCasts
+import Miri.Input.SourceCompilerRuntime
 import Miri.Input.CompilerProviders
 import Miri.Interpreter.ExecutionCast
 
@@ -22,7 +24,7 @@ private def lift (value : Except String A) : EStateM StepError S A :=
   | .ok value => pure value
   | .error reason => throw (.unsupported s!"cast compiler query: {reason}")
 
-def make (p : CompilerProviders.Prepared) (required : Required S C)
+def make (p : CompilerProviders.Prepared) (world : SourceCompilerWorld.Access S) (required : Required S C)
     (vtable : VTableHooks Provenance S C CallInstance (FnAbi TyId))
     (expose : C → Provenance → RvalueM S Unit)
     (fromExposed : C → UInt64 → RvalueM S (Pointer (Option Provenance)))
@@ -30,21 +32,41 @@ def make (p : CompilerProviders.Prepared) (required : Required S C)
     ExecutionCast.Leaves S C :=
   let facts := p.lifecycle.calls.symbols.facts
   let context := facts.context
-  { typeInfo := fun _ ty => lift (CompilerFactAdapters.castTypeInfo facts ty)
-    layoutOf := fun _ ty => lift (CompilerFacts.layoutOf context ty)
+  let sourceMode := p.program.input.sourceMaterial.isSome
+  let runtime := SourceCompilerRuntime.current p.runtime.target world
+  { typeInfo := fun _ ty => if sourceMode then do
+      let runtime ← runtime
+      lift (SourceCompilerCasts.typeInfo runtime ty)
+    else lift (CompilerFactAdapters.castTypeInfo facts ty)
+    layoutOf := fun _ ty => if sourceMode then do
+      let runtime ← runtime
+      lift (runtime.lookup ty |>.mapError toString)
+    else lift (CompilerFacts.layoutOf context ty)
     exposeProvenance := expose
     pointerFromExposedAddress := fromExposed
-    usizeLayout := fun _ => lift (context.primitiveLayout "usize")
-    ensureMonomorphic := fun _ ty => do
+    usizeLayout := fun _ => if sourceMode then do
+      let runtime ← runtime
+      lift (CompilerPrimitiveFacts.primitiveLayout runtime "usize")
+    else lift (context.primitiveLayout "usize")
+    ensureMonomorphic := fun _ ty => if sourceMode then do
+      let some current := world.get (← get) | throw (.unsupported "source cast World unavailable")
+      lift (SourceCompilerCasts.ensureMonomorphic current ty)
+    else do
       unless ← lift (CompilerFacts.boolean context ty "is_monomorphic_enough") do
         throw (.invalidProgram "compiler type still requires instantiation")
     requireNoBoundVars := required.requireNoBoundVars
     resolveFunction := required.resolveFunction
     resolveClosureFnOnce := required.resolveClosureFnOnce
-    builtinDeref := fun _ ty explicit => lift (CompilerFacts.builtinDeref context ty explicit)
+    builtinDeref := fun _ ty explicit => if sourceMode then do
+      let some current := world.get (← get) | throw (.unsupported "source cast World unavailable")
+      lift (SourceCompilerCasts.builtinDeref current ty explicit)
+    else lift (CompilerFacts.builtinDeref context ty explicit)
     boxLayout := required.boxLayout
     validateImmediateABI := validateABI
-    fieldLayout := fun _ parent index => lift (context.runtime.field parent index |>.mapError toString)
+    fieldLayout := fun _ parent index => if sourceMode then do
+      let runtime ← runtime
+      lift (runtime.field parent index |>.mapError toString)
+    else lift (context.runtime.field parent index |>.mapError toString)
     lockstepTails := required.lockstepTails
     vtableType := VTable.getPtrVTableType vtable
     vtablePointer := VTable.getPointer vtable

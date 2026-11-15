@@ -25,7 +25,7 @@ private def dispatchFromEnvironment
       (MachineHooks.State MiriMemoryKind U) Os Error Kind) := do
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let checkArgumentCompat := CompilerCallConstruction.argumentCompat p compatibilityBudget
   let writeScalar := fun (value : Scalar Provenance)
       (destination : MPlaceTy Provenance) =>
     writePlaceImmediate place choice (.scalar value)
@@ -62,7 +62,7 @@ private def dispatchFromEnvironment
     systemConvention := do
       return (← CompilerNamedShimAbi.query p.namedAbi "GetEnvironmentVariableW").conv
     expectedAbi
-    argumentCompat := calls.checkArgumentCompat choice
+    argumentCompat := checkArgumentCompat choice
     checkSymbolClash := fun name =>
       match CompilerForeignSymbols.checkSymbolClash symbols name with
       | .ok () => pure ()

@@ -311,3 +311,63 @@ EXPORTER_BIN=exporter/target/release/lean-miri-mir-exporter \
 lake env lean --run tests/input/SelectedKeyCoverageStrict.lean scratch/selected-keys.json
 lake env lean --run tests/input/AllocWorldRuntime161.lean scratch/selected-keys.json
 ```
+
+## Finite foundational material (experimental)
+
+`--foundation` selects the separate `lean-miri-foundation` version 1 format:
+
+```bash
+bash tools/export-mir.sh --output scratch/foundation.json --foundation \
+  --root array_identity -- exporter/fixtures/foundation.rs \
+  --crate-type=lib --crate-name foundation
+```
+
+Use `--foundation-signature-root std::rt::lang_start_internal` alongside the
+selected local MIR root to retain that actual standard helper's generic source
+signature, lifetime binder, environment and attributes. This explicit demand
+produces declaration material under `source_function_signatures`; it does not
+supply a MIR body, a compiler FnAbi answer or execution readiness. Ordinary
+exports leave this header collection empty and do not add its dyn types.
+
+
+This path captures generic source MIR templates, structural type/definition graphs
+and target data. It does not run the schema12 runtime-query discovery fixpoint,
+instantiate every generic argument combination, evaluate compiler query answers,
+or require rustc during later consumption. `--root` accepts generic functions in
+this mode and selects exact local definitions; dependencies are structural type
+references, not an executable call closure. Without roots every available local
+MIR body must fit the supported subset.
+
+Type and const parameters retain their rustc indices into the unified generic
+argument vector. Each body carries an `environment` with parameter declarations
+and positive trait/const-type clauses. These clauses are material to be checked
+by a consumer; exporting them does not establish that a substitution satisfies
+them. Array lengths remain structural const parameters or scalar values. ADT
+field types are identity-argument templates on definitions, so recursive structs
+do not cause enumeration of substituted types. Numeric identities are local to
+one export.
+
+The first supported MIR subset covers assignment, copy/move, storage markers,
+use (including its retag flag), binary/unary operations, repetition,
+discriminants, return, goto, unreachable and integer switches. Primitive,
+parameter, tuple, array, slice, raw pointer, erased/static reference, function
+item and struct/union types have structural encodings. Other forms abort the
+export with `foundation: unsupported`; they never become successful no-ops.
+Calls, allocation-backed constants, enum definitions, arbitrary lifetime/binder
+forms, trait resolution, layouts and ABI computation remain unsupported here.
+The existing schema12 exporter and runner remain separate; foundation JSON is
+not schema12 execution input and does not yet provide general Rust execution.
+
+Run `python3 tests/exporter/test_foundation.py` after building the pinned exporter
+for fresh positive generic/const-generic captures and fail-closed negative cases.
+
+Foundation bodies must have a computed, empty `required_consts` list, emitted
+explicitly as `required_consts: []`. The pinned rustc interpreter checks this
+list on frame entry, including constants removed from reachable control flow;
+foundation has no const evaluator and rejects every nonempty or uncomputed list.
+It also rejects coroutine, promoted/generated, non-runtime, inlined and
+spread-argument bodies, and functions requiring target features or caller
+location metadata. These entry prerequisites must not disappear when selecting
+a smaller MIR subset. Debug spans, user annotations and `mentioned_items` are
+not part of this restricted evaluator's execution data; the pinned MIR definition
+explicitly identifies `mentioned_items` as not soundness-critical.

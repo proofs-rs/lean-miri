@@ -131,7 +131,7 @@ def bindPoll
       (FD H D (Other Raw Listener TcpStream Error)) Iter) := do
   let facts ← sourceFacts p
   let symbols ← p.foreignSymbols |>.mapError lift
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let checkArgumentCompat := CompilerCallConstruction.argumentCompat p compatibilityBudget
   let poll := {base.epoll.poll with
     readiness := ReadinessMachine.bind registry base.epoll.poll.readiness
     hasRdHup := facts.target.os == "linux" || facts.target.os == "android" ||
@@ -149,7 +149,7 @@ def bindPoll
     pollAbi := match facts.pollAbi with
       | .ok abi => pure abi
       | .error error => throw (.unsupported error)
-    argumentCompat := callCompiler.checkArgumentCompat choice
+    argumentCompat := checkArgumentCompat choice
     checkSymbolClash := fun name =>
       match CompilerForeignSymbols.checkSymbolClash symbols name with
       | .ok () => pure ()
@@ -498,7 +498,7 @@ def dispatch
       (FD H D (Other Raw Listener TcpStream Error)) ArrayCursor) := do
   let facts ← sourceFacts p
   let symbols ← p.foreignSymbols |>.mapError lift
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let checkArgumentCompat := CompilerCallConstruction.argumentCompat p compatibilityBudget
   let projection := place.projection choice
   pure {
     epoll := epollHooks
@@ -508,7 +508,7 @@ def dispatch
     pollAbi := match facts.pollAbi with
       | .ok abi => pure abi
       | .error error => throw (.unsupported error)
-    argumentCompat := callCompiler.checkArgumentCompat choice
+    argumentCompat := checkArgumentCompat choice
     checkSymbolClash := fun name =>
       match CompilerForeignSymbols.checkSymbolClash symbols name with
       | .ok () => pure ()

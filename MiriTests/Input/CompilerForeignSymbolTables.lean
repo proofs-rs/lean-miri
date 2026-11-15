@@ -30,7 +30,7 @@ private def document (symbols : Catalog.ForeignSymbols) : ImportDocument := {
     frameMetadata := ⟨0, #[]⟩, instanceAbis := #[]
     functionFacts := ⟨#[], #[], #[]⟩, casts := #[], typeNames := #[], panic := #[]
     nativeSignatures := #[], retag := #[], covariance := #[]
-    globalBytes := ⟨0, 0, #[], #[]⟩, callerLocations := #[]
+    globalBytes := {saltCount := 0, strType := 0, coveredAllocations := #[], candidates := #[]}, callerLocations := #[]
     main := ⟨none, none, none, #[], none⟩, primitives := unusedPrimitives
     vtables := #[], namedTypes := none, shimAbis := none, namedShimAbis := none
     libcTypeLayouts := none, windowsTypeLayouts := none, namedConstants := none, namedStatics := none } }

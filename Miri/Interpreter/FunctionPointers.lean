@@ -75,7 +75,7 @@ private def reserve (h : Hooks K User Other) (value : FnVal Other) : M K User Al
     if let some existing := entries.functions.find? (fun e => e.callee == callee && e.salt == salt) then
       return existing.allocation
     let state ← get
-    if state.machine.memory.sourceAllocIdWorldActive then
+    if state.machine.memory.sourceAllocIdWorldActive && !state.machine.memory.sourceInitialFunctionDedupEmpty then
       throw (.unsupported "source function AllocId key/salt is not captured by the prepared raw-world profile")
     let (memory,result) := state.machine.memory.reserveAllocId
     set {state with machine := {state.machine with memory}}

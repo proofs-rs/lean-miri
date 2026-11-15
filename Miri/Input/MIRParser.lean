@@ -200,8 +200,7 @@ def makeConstant (ty : Nat) (span : MIR.SpanRef) (userType : Option Nat)
   pure ⟨span, userType, .Val value ty⟩
 
 def constantType (constant : MIR.ConstOperand) : Option Nat :=
-  match constant.value with
-  | .Val _ ty => some ty
+  some constant.value.typeId
 
 private def unwindTargets : MIR.UnwindAction → Array Nat
   | .Cleanup target => #[target]

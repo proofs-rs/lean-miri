@@ -550,6 +550,54 @@ abbrev ZeroHooks (P S C E Other Extern : Type) := CallHooks P S C E Other Extern
   require (calleeIndex == 0) "mismatch between callee ABI and callee body arguments"
   h.afterFrameInit choice
   h.pushDone choice
+/-- The zero-argument remainder preserves the real closure query. Its boolean
+is unused by the empty argument loop, while errors and state updates survive. -/
+def zeroEntryResidual (h : ZeroHooks P S C E Other Extern) (choice : C)
+    (fnInstance : CallInstance) (body : LoadedBody) (abi : FnAbi TyId)
+    (destination : RuntimeStackPlace P) (protection : Option (MPlaceTy P))
+    (cont : ReturnContinuation) : CallM S Unit := do
+  let cont := if h.abiCanUnwind abi then cont else
+    match cont with | .stop _ => cont | .goto ret _ => .goto ret .Unreachable
+  h.pushRaw choice fnInstance body destination cont
+  let frame ← h.getFrame
+  let preamble ← match frame.location with
+    | .unwinding span => pure span
+    | .mir _ => throw (.invalidProgram "raw frame does not have preamble location")
+  h.setFrame {frame with trackCallerArg := none}
+  let _ ← h.nonCapturingClosure choice fnInstance abi
+  let (_,calleeIndex) ← h.withRetagMode choice .FnEntry (pure (0,0))
+  setSpan h (← h.localSpan body.body 0)
+  unless ← h.checkArgumentCompat choice abi.ret abi.ret do
+    throw (.undefinedBehavior "AbiMismatchReturn")
+  if let some memory := protection then h.protectArgument choice memory
+  setSpan h preamble
+  require (calleeIndex == 0) "mismatch between callee ABI and callee body arguments"
+  h.afterFrameInit choice
+  h.pushDone choice
+
+/-- Actual prefix query results compose at their returned states. In particular,
+ABI demand may install a newly derived World; no global `hook = pure` equation
+or closure-query success is required. -/
+theorem zero_entry_at (h : ZeroHooks P S C E Other Extern) (choice : C)
+    (fnInstance : CallInstance) (body : LoadedBody) (abi : FnAbi TyId)
+    (destination : RuntimeStackPlace P) (cont : ReturnContinuation)
+    (before afterRequires afterAbi afterFeatures cached : S) (op : OpTy P)
+    (requires : h.requiresCallerLocation fnInstance before = .ok false afterRequires)
+    (instanceAbi : h.fnAbiOfInstance choice fnInstance #[] afterRequires = .ok abi afterAbi)
+    (features : h.checkTargetFeatures choice fnInstance afterAbi = .ok () afterFeatures)
+    (preflight : h.placeToOp choice destination afterFeatures = .ok op cached)
+    (variadic : h.abiVariadic abi = false) (convention : h.sameConvention abi abi = true)
+    (arguments : h.abiArgs abi = #[]) (ret : h.abiReturn abi = abi.ret)
+    (count : body.body.argumentCount = 0) :
+    initStackFrame h choice fnInstance body abi #[] false destination cont before =
+      zeroEntryResidual h choice fnInstance body abi destination
+        (match op.op with | .indirect memory => some ⟨memory,op.layout⟩ | .immediate _ => none) cont cached := by
+  simp only [initStackFrame,zeroEntryResidual,variadic,convention,arguments,ret,count,
+    require,setSpan,bind_assoc,pure_bind]
+  simp [bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,requires,instanceAbi,features,preflight,
+    variadic,convention,arguments,ret,count,require]
+  rfl
+
  theorem zero_entry_core (h : ZeroHooks P S C E Other Extern) (choice : C) (fnInstance : CallInstance)
     (body : LoadedBody) (abi : FnAbi TyId) (destination : MPlaceTy P) (cont : ReturnContinuation)
     (requires : h.requiresCallerLocation fnInstance = pure false)

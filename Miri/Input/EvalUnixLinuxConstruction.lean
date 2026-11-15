@@ -117,7 +117,7 @@ def fromSource {Os R P H D Aff B Poll Instant System Native Profiler Raw Listene
   unless environment.env.os == target.os && fd.file.fd.os == target.os &&
       signatures.foreign.os == target.os do
     throw (.invalidProgram "Linux foreign components disagree on compiler target OS")
-  let memory ← EvalUnixMemoryConstruction.fromSource p userRelevantCrates environment
+  let memory ← EvalUnixMemoryConstruction.fromSource p EvalCoreMachine.sourceCompilerAccess userRelevantCrates environment
     signatures memory extras spans place choice pageSize
   let getPtrFnInstance := fun pointer => do
     match ← FunctionPointers.getPtrFn functions pointer with

@@ -169,7 +169,9 @@ private def evalOperand (m : Metadata) (operand : MIR.Operand) (known : Option L
     let state ← get
     let view : ConstantState CtfeProvenance Unit Unit (Array String) :=
       ⟨state.machine.returnMemory.memory, state.machine.returnMemory.events⟩
-    let result := (let .Val value ty := constant.value; constValueToOp m (constantQueries m) value ty view)
+    let result := match constant.value with
+      | .Val value ty => constValueToOp m (constantQueries m) value ty view
+      | .SourceRequest .. => .error (.query "legacy fixture has no source constant World") view
     let (after,outcome) := match result with
       | .ok value state => (state,Except.ok value)
       | .error error state => (state,Except.error (StepError.invalidProgram (reprStr error)))

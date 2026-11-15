@@ -1,3 +1,4 @@
+import Miri.Input.SourceCompilerCasts
 import Miri.Input.CompilerCastLeaves
 import Miri.Input.CompilerVTableFacts
 import Miri.Input.CompilerVTableRuntime
@@ -123,13 +124,16 @@ def eraseSelfTraitRef (p : CompilerProviders.Prepared) (token : Nat) : Result Na
 private def lift (query : Result A) : RvalueM S A :=
   match query with | .ok value => pure value | .error error => throw (.unsupported s!"cast compiler query: {error}")
 
-def required (p : CompilerProviders.Prepared) : CompilerCastLeaves.Required S C where
+def required (p : CompilerProviders.Prepared) (access : SourceCompilerWorld.Access S) : CompilerCastLeaves.Required S C where
   requireNoBoundVars := fun _ args => do
     unless ← lift (noBoundVars p args) do
       throw (.invalidProgram "source no_bound_vars assertion failed")
   resolveFunction := fun _ definition args => lift (resolveFunction p definition args)
   resolveClosureFnOnce := fun _ definition args => lift (resolveClosureFnOnce p definition args)
-  lockstepTails := fun _ source target => lift (lockstepTails p source target)
+  lockstepTails := fun _ source target => if p.program.input.sourceMaterial.isSome then do
+    let some world := access.get (← get) | throw (.unsupported "source cast World unavailable")
+    lift (SourceCompilerCasts.lockstepTails world source target)
+  else lift (lockstepTails p source target)
   boxLayout := fun _ ty => lift (boxLayout p ty)
   principal := fun _ token => lift (principal p token)
   supertraitSlot := fun _ source target => lift (supertraitSlot p source target)

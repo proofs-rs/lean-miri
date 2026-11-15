@@ -1,0 +1,60 @@
+--- a/compiler/rustc_middle/src/queries.rs
++++ b/compiler/rustc_middle/src/queries.rs
+@@ -1887,6 +1887,11 @@
+         desc { "getting whether a crate has `#![no_builtins]`" }
+         separate_provide_extern
+     }
++    /// Raw defining compiler options retained in metadata for finite source consumers.
++    query lean_miri_defining_compilation(_: CrateNum) -> usize {
++        desc { "reading defining crate compilation source options" }
++        separate_provide_extern
++    }
+     query symbol_mangling_version(_: CrateNum) -> SymbolManglingVersion {
+         desc { "getting a crate's symbol mangling version" }
+         separate_provide_extern
+--- a/compiler/rustc_metadata/src/rmeta/mod.rs
++++ b/compiler/rustc_metadata/src/rmeta/mod.rs
+@@ -69,7 +69,7 @@
+ /// Metadata encoding version.
+ /// N.B., increment this if you change the format of metadata such that
+ /// the rustc version can't be found to compare with `rustc_version()`.
+-const METADATA_VERSION: u8 = 11;
++const METADATA_VERSION: u8 = 12;
+ 
+ /// Metadata header which includes `METADATA_VERSION`.
+ ///
+@@ -327,6 +327,8 @@
+     panic_runtime: bool,
+     profiler_runtime: bool,
+     symbol_mangling_version: SymbolManglingVersion,
++    /// Raw defining Session options, not parameter-attribute deductions.
++    defining_compilation: (u8, bool),
+ 
+     specialization_enabled_in: bool,
+ }
+--- a/compiler/rustc_metadata/src/rmeta/encoder.rs
++++ b/compiler/rustc_metadata/src/rmeta/encoder.rs
+@@ -813,6 +813,10 @@
+                 panic_runtime: find_attr!(attrs, PanicRuntime),
+                 profiler_runtime: find_attr!(attrs, ProfilerRuntime),
+                 symbol_mangling_version: tcx.sess.opts.get_symbol_mangling_version(),
++                defining_compilation: (match tcx.sess.opts.optimize {
++                    OptLevel::No => 0, OptLevel::Less => 1, OptLevel::More => 2,
++                    OptLevel::Aggressive => 3, OptLevel::Size => 4, OptLevel::SizeMin => 5,
++                }, tcx.sess.opts.incremental.is_some()),
+ 
+                 crate_deps,
+                 dylib_dependency_formats,
+--- a/compiler/rustc_metadata/src/rmeta/decoder/cstore_impl.rs
++++ b/compiler/rustc_metadata/src/rmeta/decoder/cstore_impl.rs
+@@ -358,6 +358,10 @@
+     extern_crate => { cdata.extern_crate.map(|c| &*tcx.arena.alloc(c)) }
+     is_no_builtins => { cdata.root.no_builtins }
+     symbol_mangling_version => { cdata.root.symbol_mangling_version }
++    lean_miri_defining_compilation => {
++        let (optimization, incremental) = cdata.root.defining_compilation;
++        usize::from(optimization) | (usize::from(incremental) << 3)
++    }
+     specialization_enabled_in => { cdata.root.specialization_enabled_in }
+     reachable_non_generics => {
+         let reachable_non_generics = tcx

@@ -1,4 +1,5 @@
 import Miri.Input.CompilerProviders
+import Miri.Input.SourceCompilerRuntime
 import Miri.Interpreter.GlobalMemoryCopyMachine
 
 /-! Direct source place.rs copy_op_no_validate padding decision and physical
@@ -24,7 +25,22 @@ def hasPadding (runtime : RuntimeMetadata) (debug : Bool) (layout : LocalLayout)
     else pure (total != layout.layout.size)
   | .SimdVector .. | .SimdScalableVector .. | .Memory .. => pure true
 
-def hooks [DecidableEq K] (runtime : RuntimeMetadata) (debug : Bool)
+/-- Only the scalar-pair branch inspects type shape. Read its canonical identity
+from the current World; geometry and the pinned padding rule stay unchanged. -/
+def hasPaddingCurrent (runtime : RuntimeMetadata) (world : SourceCompilerWorld.Access S)
+    (debug : Bool) (layout : LocalLayout) : EStateM StepError S Bool := do
+  let runtime ← match layout.layout.backendRepr with
+    | .ScalarPair .. =>
+      if runtime.source.sourceMaterial.isSome then
+        SourceCompilerRuntime.current runtime.target world
+      else pure runtime
+    | _ => pure runtime
+  match hasPadding runtime debug layout with
+  | .ok value => pure value
+  | .error error => throw error
+
+def hooks [DecidableEq K] (runtime : RuntimeMetadata) (world : SourceCompilerWorld.Access (ValidityMachine.State K U))
+    (debug : Bool)
     (compatible : LocalLayout → LocalLayout → Except StepError Bool)
     (access : ValidityMachine.Access K U)
     (addresses : ValidityMachine.UserState U → AllocAddresses.GlobalAddressState)
@@ -33,7 +49,7 @@ def hooks [DecidableEq K] (runtime : RuntimeMetadata) (debug : Bool)
     (validationBudget : Nat) :
     PlaceCopyHooks Provenance (ValidityMachine.State K U) C where
   compatible := compatible
-  hasPadding := hasPadding runtime debug
+  hasPadding := hasPaddingCurrent runtime world debug
   readRaw := fun _ => PlaceMachine.readRaw access
   memoryCopy := GlobalMemoryCopyMachine.typedCopy access addresses arithmetic visitor.projection.dynamic
     visitor.projection.dynamicFuel debug

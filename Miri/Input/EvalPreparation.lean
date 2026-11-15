@@ -1,3 +1,4 @@
+import Miri.Input.SourceAllocationIdentityInstallation
 import Miri.Input.EvalEntryMachine
 import Miri.Input.CompilerGlobals
 import Miri.Input.CompilerContextSpan
@@ -59,6 +60,10 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
         CompilerAllocIdWorld.install compiler.program.input.compilerAllocIdWorld compiler.program.input.allocations imported.memory with
       | .ok value => pure value
       | .error error => return ⟨imported.memory,.error s!"compiler AllocId world: {error}"⟩
+    let memory ← match SourceAllocationIdentityInstallation.install compiler.program.input.sourceMaterial
+        compiler.program.input.allocations memory with
+      | .ok value => pure value
+      | .error error => return ⟨memory,.error s!"initial compiler allocation identity: {error}"⟩
     return ⟨memory,.ok ⟨compiler,image,types,layouts,dummySpan⟩⟩
 
 def prepare (input : LoweredProgram) : Attempt :=

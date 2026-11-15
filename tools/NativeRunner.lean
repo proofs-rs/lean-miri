@@ -1,3 +1,4 @@
+import Miri.Frontend.FoundationInput
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.CompilerMiriEntry
@@ -462,12 +463,16 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
 private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     (initialMemory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (pageSize : UInt64) (numCpus hostPid : UInt32) (diagnosticSeed : Option UInt64)
-    (profile : Lean.Options) (ui : Option UiSettings) :
+    (profile : Lean.Options) (ui : Option UiSettings) (argv0 : String)
+    (initialWorld : Option Input.SourceCompilerWorld.World) :
     Except String ((Option (Array HostStdio.Entry) → Array ExecutionChoices.Input → Except StepError
       (Input.EvalSourceRunFinalization.Result OuterState)) ×
       (Array ExecutionChoices.Input → Except String String)) := do
   let options := (ui.map uiOptions).getD options
   let compiler := prepared.compiler
+  let sourceCompiler ← match initialWorld with
+    | some world => pure world
+    | none => Input.SourceCompilerWorld.create compiler.program.input
   let dummy := prepared.dummySpan
   let selectedEntry ← (Input.CompilerMain.sourceCompilerEntry compiler.main).mapError toString
   let (definition, entryType) ← match selectedEntry with
@@ -493,10 +498,11 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     weakMemory := (ui.map (·.weakMemory)).getD true
     backend := if (ui.map (·.dataRace)).getD true then .vclocks else .none
     trackedTags := if (ui.map (·.treeBorrows)).getD true then some #[] else none
+    sourceCompiler := some sourceCompiler
     validation := options.place.validation
     alignment := (ui.map (·.alignment)).getD .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
   let bootstrap : Input.EvalBootstrap.Configuration Os := {
-    arguments := #[(ui.map (·.source)).getD "/workspace/lean-miri/scratch/main31.rs"], entry := definition, entryType
+    arguments := #[argv0], entry := definition, entryType
     communicate := false, forwarded := #[], environment := #[], overrides := #[] }
   let targetFacts ← compiler.externStatics.targetFacts.mapError id
   let startupFacts ← (Input.EvalStartupRuntimeConstruction.prepare compiler).mapError id
@@ -701,7 +707,7 @@ private def runMain (args : List String) (control : Option ControlOutput) : IO U
   boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_choices=unbounded; byte_length=uncapped; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
-  let decoded ← must (Input.decodeJsonProfiled input profile)
+  let decoded ← must (Miri.Frontend.Foundation.decodeRunnerInputProfiled input profile)
   boundary "decode: accepted"
   boundary "lower: start"
   let program ← must (Input.lowerProgram decoded.document)
@@ -710,22 +716,20 @@ private def runMain (args : List String) (control : Option ControlOutput) : IO U
   let attempt := Input.EvalPreparation.prepareProfiled profile program
   let prepared ← must attempt.outcome
   boundary "prepare: complete"
-  -- Keep the actual prepared identity tables visible at the body reported by
-  -- the source105 terminal. This is diagnostic only; all lookups stay exact.
-  let bodyIndex := 1814
-  let bodySource := prepared.compiler.program.bundle.bodies[bodyIndex]?.map fun body =>
-    s!"source_path={body.input.sourcePath}, def_path={body.input.defPath}, definition={reprStr body.input.definitionId}"
-  let sourceRows := prepared.compiler.program.instances.filter (·.2 == bodyIndex)
-  let callRows := (prepared.compiler.lifecycle.calls.calls.bodies.filter (·.bodyIndex == bodyIndex)).map fun row =>
-    s!"fnInstance={reprStr row.fnInstance}, sourceInstanceId={row.sourceInstanceId}, bodyIndex={row.bodyIndex}"
-  boundary s!"canonical_body_1814: {reprStr bodySource}; source_rows={reprStr sourceRows}; call_rows={reprStr callRows}"
+  let argv0 ← match ui with
+    | some settings => pure settings.source
+    | none => do
+      let some source := prepared.compiler.program.input.producerSettings.rustcArgs.find?
+          (·.endsWith ".rs") |
+        throw (IO.userError "exported Rust source argument absent")
+      pure source
   let (pageSize,hostCpus) ← captureLinuxProfile
   let numCpus := if ui.isSome then 1 else hostCpus
   let actualProfile := match ui with
     | some ui => uiProfile ui
     | none => Lean.Json.mkObj [
       ("num_cpus", toJson numCpus.toNat), ("environment_policy", toJson ("empty" : String)),
-      ("argv0", toJson ("/workspace/lean-miri/scratch/main31.rs" : String)),
+      ("argv0", toJson argv0),
       ("float_nondeterminism", toJson options.floatNondeterministic),
       ("cmpxchg_weak_failure_rate_bits", toJson options.weakFailureRate.toNat),
       ("short_fd_operations", toJson false), ("choice_policy", toJson (choiceMode diagnosticSeed))]
@@ -733,7 +737,8 @@ private def runMain (args : List String) (control : Option ControlOutput) : IO U
   let hostPid ← IO.Process.getPID
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
-    (prepareRun prepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile ui)
+    (prepareRun prepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile ui argv0
+      decoded.initialWorld)
   let mismatch ← match checkValidationMismatch initialInputs with
     | .ok report => pure report
     | .error error => throw (IO.userError s!"validation preflight regression failed: {error}")

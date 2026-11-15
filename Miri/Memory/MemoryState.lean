@@ -129,6 +129,10 @@ structure MemoryState (Prov Extra MachineKind : Type) where
   /-- Optional exact post-export TCX source-number world. Runtime IDs remain
   dense; this crosswalk retains raw rustc identities for diagnostics. -/
   sourceAllocIdWorldActive : Bool := false
+  /-- Complete observed initial dedup map has no Function keys. Runtime function
+  reservations may then extend the actual function registry and shared supply;
+  nonempty/unknown initial function families need structural key witnesses. -/
+  sourceInitialFunctionDedupEmpty : Bool := false
   sourceAllocIdNext : UInt64 := 1
   sourceAllocIdExhausted : Bool := false
   private sourceAllocIdByRuntimeTable : KeyedArray UInt64 (AllocId × UInt64)
@@ -413,7 +417,7 @@ private def insertReservedGlobal (state : MemoryState Prov Extra MachineKind)
 /-- Validate before updating any table, and return the exact input state on a
 metadata failure. Returning the prefix together with its outcome lets callers
 release their rollback alias before the successful indexed updates. -/
-private def registerReservedGlobal (state : MemoryState Prov Extra MachineKind)
+def registerReservedGlobal (state : MemoryState Prov Extra MachineKind)
     (exportId : Nat) (entry : GlobalAllocation) :
       MemoryState Prov Extra MachineKind × Except MemoryMetadataError Unit :=
   match validateReservedGlobal state exportId entry with

@@ -333,7 +333,7 @@ def placeMemoryCopy [DecidableEq Kind]
 
 structure PlaceCopyHooks (P S C : Type) where
   compatible : LocalLayout → LocalLayout → Except StepError Bool
-  hasPadding : LocalLayout → Except StepError Bool
+  hasPadding : LocalLayout → PlaceM S Bool
   readRaw : C → OpTy P → PlaceM S (ImmediateOrPlace P)
   /-- Resolve dynamic sizes; require sizes compatible; mem_copy nonoverlapping
   true; check source then destination misalignment only after memory copy. -/
@@ -348,7 +348,7 @@ def copyRuntimePlaceNoValidate (h : PlaceHooks P S C E) (copy : PlaceCopyHooks P
     (choice : C) (source : OpTy P) (dest : RuntimePlace P) (allowTransmute : Bool) : PlaceM S Unit := do
   let compatible ← placeLift (copy.compatible source.layout dest.layout)
   if !compatible && !allowTransmute then throw (.invalidProgram "copy type mismatch")
-  let padding ← placeLift (copy.hasPadding source.layout)
+  let padding ← copy.hasPadding source.layout
   let value ← if padding then pure (match source.op with
       | .immediate value => ImmediateOrPlace.immediate ⟨value, localMemoryLayout source.layout⟩
       | .indirect mplace => .place ⟨mplace, localMemoryLayout source.layout⟩)

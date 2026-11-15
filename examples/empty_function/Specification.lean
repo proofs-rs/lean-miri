@@ -73,12 +73,13 @@ structure Metadata (s : Static) where
     CompilerInstance.definitionOf
       s.prepared.compiler.lifecycle.frames.calls.calls.program.input.instances s.functionInstance = .ok definitionIndex ∧
     s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition
-  /-- Resolved local types depend on the current frame's body/instance key;
-  local values, memory, thread state and caches are unconstrained by this fact. -/
+  /-- The selected executable MIR already contains canonical local type IDs.
+  Current World/body ownership is checked separately by LocalMetadata; this
+  immutable edge makes no claim that a runtime query succeeds in every state. -/
   normalizedLocal : ∀ frame : CompilerFrameContext.ActualFrame,
     frame.bodyIdentity = s.loaded.identity → frame.body = s.loaded.body →
     frame.functionInstance = s.functionInstance →
-    CompilerFrameContext.localType s.prepared.compiler frame 0 = .ok s.abi.ret.layout.ty
+    frame.body.locals[0]? = some s.abi.ret.layout.ty
   loweredBody : LoweredBody
   bodyRow : s.prepared.compiler.program.bundle.bodies[s.loaded.identity.index]? = some loweredBody
   bodyContents : loweredBody.body = s.loaded.body
@@ -199,11 +200,11 @@ structure ResourceMargins (s : Static) (p : Packet)
     2^row.2.align.pow2 ≤ maximumAlignment
   localSizes : ∀ caller id layout,
     p.before.stack.currentFrame? = some caller →
-    Nonempty (InputDraft.LocalMetadata s caller id layout) →
+    Nonempty (InputDraft.LocalMetadata s p.before caller id layout) →
     layout.layout.size.bytes.toNat ≤ maximumSize
   localAlignments : ∀ caller id layout,
     p.before.stack.currentFrame? = some caller →
-    Nonempty (InputDraft.LocalMetadata s caller id layout) →
+    Nonempty (InputDraft.LocalMetadata s p.before caller id layout) →
     2^layout.layout.align.abi.pow2 ≤ maximumAlignment
   maximumSizeBudget : maximumSize ≤ budget
   maximumAlignmentBudget : maximumAlignment ≤ budget

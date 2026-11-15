@@ -79,6 +79,10 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
         pure value.instanceId
     entries := entries.push ⟨id, parameters, signature, outcome⟩
   let sectionsResult : Except String (Array SectionQuery) := do
+    if let some material := program.input.sourceMaterial then
+      let some declarations := material.linkSections | throw "source link-section declaration coverage unavailable"
+      return declarations.map fun declaration =>
+        ⟨declaration.name,.error s!"source link-section initializer/allocation capability unavailable: {declaration.name}"⟩
     let some records := source.linkSections | throw "compiler link-section catalog absent"
     records.mapM fun record => do
       let result := do

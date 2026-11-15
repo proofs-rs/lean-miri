@@ -360,7 +360,12 @@ inductive TypeConst where
 
 inductive MirConst where
   | Val (value : ConstValue) (ty : TyId)
+  /-- Evaluation-local source request; never a fabricated CTFE value/AllocId. -/
+  | SourceRequest (request : Nat) (ty : TyId)
   deriving Repr, DecidableEq
+
+def MirConst.typeId : MirConst → TyId
+  | .Val _ ty | .SourceRequest _ ty => ty
 
 structure ConstOperand where
   span : SpanRef

@@ -62,20 +62,14 @@ private def sourceOfFrame (frame : CompilerFrameContext.ActualFrame) :
 /-- Preserve each concrete full-instance identity and the actual active stack.
 Invalid compiler metadata is an error; neither a nearby span nor a different
 body with equal contents supplies missing evidence. -/
-def collect (p : CompilerProviders.Prepared)
+def collect (world : SourceCompilerWorld.World)
     (frames : Array CompilerFrameContext.ActualFrame) :
     Except String (Array (CallInstance × MIR.SpanRef)) := do
   let mut result := #[]
   for frame in frames.toList.reverse do
-    let body ← CompilerFrameContext.bodyOfFrame p frame
-    unless body.input.instanceId == frame.functionInstance do
-      throw "allocation backtrace physical instance/body mismatch"
-    let sourceInstance ← CompilerInstance.source p.program.input.instances frame.functionInstance
-    let some definition := body.input.definitionId | throw "allocation backtrace body definition is absent"
-    unless sourceInstance.instanceKind.defId == definition do
-      throw "allocation backtrace def_span belongs to a different instance definition"
-    let trace ← frameTrace p.program.input.spans p.program.input.instances.size
-      body.input.sourceScopes frame.functionInstance ⟨body.input.preambleDefSpanId⟩
+    let body ← SourceCompilerFrame.body world frame.functionInstance frame.bodyIdentity frame.body
+    let trace ← frameTrace world.canonical.spans world.canonical.instances.size
+      body.sourceScopes frame.functionInstance ⟨body.preambleDefSpanId⟩
       (← sourceOfFrame frame)
     result := result ++ trace
   pure result

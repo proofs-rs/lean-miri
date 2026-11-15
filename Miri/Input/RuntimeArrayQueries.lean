@@ -1,4 +1,4 @@
-import Miri.Input.RuntimeArrayTypes
+import Miri.Input.SourceCompilerArrays
 import Miri.Interpreter.OsStrings
 import Miri.Interpreter.ValidityVisitor
 
@@ -11,6 +11,7 @@ open Miri.ABI Miri.Interpreter
 structure Access (S : Type) where
   get : S → RuntimeArrayTypes.World
   set : S → RuntimeArrayTypes.World → S
+  sourceCompiler : Option (SourceCompilerWorld.Access S) := none
 private def failure : RuntimeArrayTypes.Error → StepError
   | .metadata reason => .unsupported s!"runtime array compiler metadata: {reason}"
   | .missingRuntimeType id => .unsupported s!"missing canonical runtime array type {id}"
@@ -20,31 +21,55 @@ private def lift (value : Except RuntimeArrayTypes.Error A) : EStateM StepError 
   | .ok value => pure value
   | .error error => throw (failure error)
 
+/-- Refresh a checked array view from the same canonical World. Existing IDs
+are verified before any snapshot is replaced. -/
+def current (access : Access S) : EStateM StepError S RuntimeArrayTypes.World := do
+  let state ← get
+  if let some source := access.sourceCompiler then
+    let some compiler := source.get state | throw (.unsupported "canonical array World unavailable")
+    let arrays ← match SourceCompilerArrays.view (access.get state) compiler with
+      | .ok value => pure value
+      | .error reason => throw (.unsupported s!"canonical array view: {reason}")
+    set (access.set state arrays)
+    return arrays
+  return access.get state
+
 /-- Canonical constructor provider for EntryArguments and other runtime-sized
 arrays, using the actual supplied element type identity and persistent World. -/
 def arrayLayout (access : Access S) (element : MIR.TyId) (count : UInt64) :
     EStateM StepError S LocalLayout := do
   let state ← get
+  if let some source := access.sourceCompiler then
+    let some compiler := source.get state | throw (.unsupported "canonical array World unavailable")
+    let (layout,arrays,compiler) ← match SourceCompilerArrays.internCached (access.get state) compiler element count with
+      | .ok value => pure value
+      | .error reason => throw (.unsupported s!"canonical array demand: {reason}")
+    set (source.put (access.set state arrays) compiler)
+    return layout
   let (layout,world) ← lift (RuntimeArrayTypes.internElement (access.get state) element count)
   set (access.set state world)
   pure layout
 
+/-- OS-string constructors use the same canonical element IDs as other arrays. -/
+def osStringArray (access : Access S) (wide : Bool) (count : UInt64) :
+    EStateM StepError S LocalLayout := do
+  let arrays := access.get (← get)
+  arrayLayout access (if wide then arrays.wideLayout.ty else arrays.byteLayout.ty) count
+
 def osStringsHooks (access : Access S) (base : OsStrings.Hooks P S Os Kind) :
     OsStrings.Hooks P S Os Kind :=
   { base with arrayLayout := fun wide count => do
-      let state ← get
-      let (layout,world) ← lift (RuntimeArrayTypes.osStringArray (access.get state) wide count)
-      set (access.set state world)
-      pure layout }
+      osStringArray access wide count }
 
 def layoutOf (access : Access S) (id : MIR.TyId) : EStateM StepError S LocalLayout := do
-  lift (RuntimeArrayTypes.lookup (access.get (← get)) id)
+  let world ← current access
+  lift (RuntimeArrayTypes.lookup world id)
 
 /-- Source array field type is the constructor's element type. This does not
 infer an element from a stride, size, memory content or diagnostic spelling. -/
 def fieldLayout (access : Access S) (base : LocalLayout → Nat → EStateM StepError S LocalLayout)
     (parent : LocalLayout) (index : Nat) : EStateM StepError S LocalLayout := do
-  let world := access.get (← get)
+  let world ← current access
   if world.entries.any (·.value.ty == parent.ty) then
     unless (← lift (RuntimeArrayTypes.lookup world parent.ty)) == parent do
       throw (.invalidProgram "canonical runtime array layout/type mismatch")
@@ -71,13 +96,13 @@ def validityHooks (access : Access S) (base : ValidityVisitor.Hooks P S C E Fn A
     ValidityVisitor.Hooks P S C E Fn Abi Pad :=
   { base with
     classify := fun choice ty => do
-      let world := access.get (← get)
+      let world ← current access
       if world.entries.any (·.value.ty == ty) then
         let (_,element) ← lift (RuntimeArrayTypes.arrayInfo world ty)
         pure (.sequence element.ty)
       else base.classify choice ty
     isFreeze := fun choice ty => do
-      let world := access.get (← get)
+      let world ← current access
       if world.entries.any (·.value.ty == ty) then
         -- Source's trivial-freeze path recurses through constructed arrays
         -- and accepts primitive scalars/references/pointers. Other element

@@ -272,7 +272,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     otherMetadata prepareDirectory paths
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let checkArgumentCompat := CompilerCallConstruction.argumentCompat p compatibilityBudget
   pure {
     paths
     systemConvention := do return (← CompilerNamedShimAbi.query p.namedAbi "CreateFileW").conv
@@ -283,7 +283,7 @@ def fromSource [DecidableEq MiriMemoryKind]
       unless expected.args == request.args && expected.ret == request.ret do
         throw (.invalidProgram s!"Windows file ABI recipe disagrees with `{name}`")
       CompilerNamedShimAbi.query p.namedAbi name
-    argumentCompat := calls.checkArgumentCompat choice
+    argumentCompat := checkArgumentCompat choice
     checkSymbolClash := fun name =>
       match CompilerForeignSymbols.checkSymbolClash symbols name with
       | .ok () => pure ()

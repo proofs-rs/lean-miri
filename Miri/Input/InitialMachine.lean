@@ -1,5 +1,6 @@
 import Miri.Interpreter.RaceMode
 import Miri.Input.EvalWorld
+import Miri.Input.SourceCompilerArrays
 import Miri.Concurrency.GlobalState
 
 /-! Portable machine.rs::new initialization on canonical shared storage.
@@ -40,6 +41,8 @@ structure Configuration (Aff B : Type) where
   /-- Explicit allocation identities selected for source tracking diagnostics.
   Runtime allocation identities must already have been resolved by the caller. -/
   trackedAllocations : Array AllocId := #[]
+  /-- Seeded from one checked input before compiler queries are enabled. -/
+  sourceCompiler : Option SourceCompilerWorld.World := none
   validation : ValidityMachine.ValidationMode
   alignment : ValidityMachine.AlignmentCheck
   affinity : Option Aff
@@ -53,6 +56,11 @@ def create (config : Configuration Aff B)
     (memory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (types : RuntimeArrayTypes.World) (choices : ExecutionChoices.Tape) (host : Host) :
     Except StepError (EvalWorld.State Os R P H D O Aff B Host) := do
+  let types ← match config.sourceCompiler with
+    | none => pure types
+    | some compiler =>
+      (SourceCompilerArrays.view types compiler).mapError (fun reason =>
+        StepError.unsupported s!"canonical array bootstrap: {reason}")
   let addresses ← (GlobalAddressState.new config.provenance config.addressMode
     config.geometry.stackAddress config.addressStop config.addressReuse).mapError
       (fun error => .invalidProgram s!"initial addresses: {reprStr error}")
@@ -71,7 +79,8 @@ def create (config : Configuration Aff B)
     environment := .uninit, directories := {}, descriptors := descriptors, ownership := ownership
     entry := ⟨none,none,none,none⟩, externStatics := {} }
   let world : EvalWorld.World Os R P H D O Aff B Host :=
-    {runtime, main := none, types, functions := ⟨#[],#[]⟩, vtables := ⟨#[]⟩
+    {runtime, main := none, types, sourceCompiler := config.sourceCompiler,
+     functions := ⟨#[],#[]⟩, vtables := ⟨#[]⟩
      symbols := .empty, choices, trackedAllocations := config.trackedAllocations
      backend := config.backend, host}
   let user : EvalWorld.User Os R P H D O Aff B Host := {

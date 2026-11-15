@@ -1,4 +1,5 @@
 import Miri.Input.Model.Types
+import Miri.Input.Model.SourceSymbols
 import Miri.MIR.Syntax
 import Miri.ABI.ExternAbi
 
@@ -158,6 +159,8 @@ structure ForeignSymbols where
   noAllocShimSymbol : String
   allocatorShims : Array (String × AllocatorTarget)
   exportedCandidates : Option (Array ForeignCandidate)
+  /-- Raw finite declarations; symbols/winners/instances are computed by the provider. -/
+  sourceDeclarations : Option SourceSymbols.Material := none
   selectedForeignFallbacks : Option (Array ForeignFallback)
   externDeclarations : Option (Array ExternDeclaration)
   selectedExports : Option (Array SelectedExport)
@@ -261,7 +264,25 @@ structure GlobalBytes where
   strType : TypeId
   coveredAllocations : Array AllocationId
   candidates : Array GlobalByteCandidate
+  /-- Internal demand-time source capability. Existing serialized schemas decode
+  complete evidence (true). False means unavailable, never an empty answer. -/
+  evidenceAvailable : Bool := true
   deriving Repr, DecidableEq
+
+namespace GlobalBytes
+
+/-- No coverage or salt answer is asserted by an unavailable capability. -/
+def unavailable (strType : TypeId) : GlobalBytes := {
+  strType, saltCount := 0, coveredAllocations := #[], candidates := #[],
+  evidenceAvailable := false }
+
+/-- Unavailable evidence may not carry payload that looks like partial answers. -/
+def validateAvailability (source : GlobalBytes) : Except String Unit := do
+  if !source.evidenceAvailable then
+    unless source.saltCount == 0 && source.coveredAllocations.isEmpty && source.candidates.isEmpty do
+      throw "unavailable global byte evidence carries answer payload"
+
+end GlobalBytes
 
 structure StartResolution where
   instanceId : InstanceId

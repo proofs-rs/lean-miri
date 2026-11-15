@@ -58,5 +58,6 @@ def evalOperandWithLayout (runtime : Input.RuntimeMetadata)
   match constant.value with
   | .Val value ty =>
     evalValueWithLayout runtime functions arithmetic externStatic classifyConstantError value ty known checkKnown
+  | .SourceRequest .. => throw (.unsupported "source constant request requires the shared World resolver")
 
 end Miri.Interpreter.ConstantMachine

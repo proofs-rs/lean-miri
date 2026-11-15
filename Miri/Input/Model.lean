@@ -1,6 +1,7 @@
 import Miri.Input.Model.Types
 import Miri.Input.Model.Catalogs
 import Miri.Input.Model.Coroutine
+import Miri.Input.Model.SourceMaterial
 
 namespace Miri.Input
 
@@ -28,6 +29,10 @@ structure ImportDocument where
   coroutineCoverage : Option CoroutineCoverage := none
   queries : Catalog.Queries
   producerSettings : Catalog.ProducerSettings
+  /-- Original finite typed source facts, distinct from imported query answers.
+  None is the legacy metadata path; Some forbids pretending absent source MIR
+  or ABI material was supplied by an existing unrelated catalog row. -/
+  sourceMaterial : Option SourceMaterial := none
 
 structure ExecutionInput where
   document : ImportDocument

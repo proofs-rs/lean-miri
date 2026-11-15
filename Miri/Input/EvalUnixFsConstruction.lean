@@ -125,6 +125,7 @@ private def namedTargetPointerPlace [DecidableEq MiriMemoryKind]
 layouts/constants and FD lookups from the existing source descriptor table. -/
 def metadataFromSource [DecidableEq MiriMemoryKind]
     (p : CompilerProviders.Prepared)
+    (world : SourceCompilerWorld.Access (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U)))
     (access : ValidityMachine.Access MiriMemoryKind U)
     (projection : PlaceProjectionHooks Provenance
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U)) C MachineHooks.FrameExtra)
@@ -145,7 +146,7 @@ def metadataFromSource [DecidableEq MiriMemoryKind]
     Except StepError (UnixFsMetadata.Hooks
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))
       (Files.Ref (Files.Description H D O)) D Path HM Time E) := do
-  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts
+  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts world
   let errors := {errors with family := ForeignItems.Family.unix, os}
   let readScalar : OpTy Provenance → M
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))
@@ -291,12 +292,7 @@ def osStringsFromSource [DecidableEq MiriMemoryKind]
     writeCString := RawMemoryMachine.writeCString access pointer.arithmetic
     writeWideString := OsStringMachine.writeWideString osPointer
     arrayLayout := fun wide count => do
-      let state ← get
-      match RuntimeArrayTypes.osStringArray (memory.arrays.get state) wide count with
-      | .error error => throw (.unsupported s!"runtime OS-string array layout: {reprStr error}")
-      | .ok (layout,world) =>
-        set (memory.arrays.set state world)
-        pure layout
+      RuntimeArrayQueries.osStringArray memory.arrays wide count
     allocate := fun layout kind => do
       unless layout.layout.isSized do throw (.invalidProgram "unsized filesystem path allocation")
       let result ← ReallocationDriver.allocateConfigured memory.allocation layout.layout.size

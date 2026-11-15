@@ -1,3 +1,4 @@
+import Miri.Input.SourceCompilerDiscriminants
 import Miri.Input.CompilerProviders
 import Miri.Input.CompilerDiscriminantFacts
 import Miri.Interpreter.CompilerExecutionProviders
@@ -30,14 +31,31 @@ def scalar (p : CompilerProviders.Prepared) : ExecutionScalar.Leaves S C :=
     metadataLayout := fun _ ty => physical (CompilerExecutionProviders.metadataLayout context ty)
     unitLayout := fun _ => lift (CompilerFacts.unitLayout context) }
 
-def discriminant (p : CompilerProviders.Prepared)
+def discriminant (p : CompilerProviders.Prepared) (world : SourceCompilerWorld.Access S)
     (scalarMayBeNull : C → Scalar Provenance → RvalueM S Bool) :
     ExecutionLeaves.Discriminant S C :=
   let context := p.lifecycle.calls.symbols.facts.context
-  { discriminantLayout := fun _ ty => lift (CompilerDiscriminantFacts.discriminantLayout context ty)
-    tagLayout := fun _ tag => lift (CompilerDiscriminantFacts.tagLayout context tag)
-    discriminantValue := fun _ ty index => lift (CompilerDiscriminantFacts.discriminantValue context ty index)
-    variantForDiscriminant := fun _ ty bits => lift (CompilerDiscriminantFacts.variantForDiscriminant context ty bits)
-    adtVariantCount := fun _ ty => lift (CompilerDiscriminantFacts.adtVariantCount context ty)
+  let sourceMode := p.program.input.sourceMaterial.isSome
+  let current := SourceCompilerRuntime.current p.runtime.target world
+  { discriminantLayout := fun _ ty => if sourceMode then do
+      let runtime ← current
+      lift (SourceCompilerDiscriminants.layout runtime ty)
+    else lift (CompilerDiscriminantFacts.discriminantLayout context ty)
+    tagLayout := fun _ tag => if sourceMode then do
+      let runtime ← current
+      lift (CompilerDiscriminantFacts.tagLayout {context with runtime} tag)
+    else lift (CompilerDiscriminantFacts.tagLayout context tag)
+    discriminantValue := fun _ ty index => if sourceMode then do
+      let runtime ← current
+      lift (SourceCompilerDiscriminants.value runtime ty index)
+    else lift (CompilerDiscriminantFacts.discriminantValue context ty index)
+    variantForDiscriminant := fun _ ty bits => if sourceMode then do
+      let runtime ← current
+      lift (SourceCompilerDiscriminants.variantForDiscriminant runtime ty bits)
+    else lift (CompilerDiscriminantFacts.variantForDiscriminant context ty bits)
+    adtVariantCount := fun _ ty => if sourceMode then do
+      let runtime ← current
+      lift (SourceCompilerDiscriminants.variantCount runtime ty)
+    else lift (CompilerDiscriminantFacts.adtVariantCount context ty)
     scalarMayBeNull := scalarMayBeNull }
 end Miri.Input.CompilerScalarLeaves

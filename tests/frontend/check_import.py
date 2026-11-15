@@ -28,6 +28,8 @@ run_cmd do
   for dependency in (← collectAxioms ``Client.imported) do
     unless #[``propext, ``Quot.sound, ``Classical.choice].contains dependency do
       throwError "Imported value depends on an unapproved axiom: {{dependency}}"
+def classicTables (d : Miri.Input.ImportDocument) :=
+  (d.compilerPredicates, d.compilerAbiLayoutSchema, d.producer, d.runtimeTargetDataLayout, d.predicates, d.definitions, d.typeConstants, d.layouts, d.files, d.spans, d.types, d.allocations, d.compilerAllocIdWorld, d.instances, d.selectedScope, d.functionAbis, d.bodyRoots, d.bodies, d.coroutineCoverage, d.queries, d.producerSettings)
 def main : IO Unit := do
   let expected ← Miri.Input.decodeFile {json.dumps(full)}
   match expected with
@@ -38,7 +40,9 @@ def main : IO Unit := do
       | some (.memory memory) => !memory.relocations.isEmpty
       | _ => false) do
       throw (IO.userError "reflection fixture has no compiler relocation evidence")
-    unless Lean.toExpr Client.imported.document == Lean.toExpr expected.document do
+    unless Client.imported.document.sourceMaterial.isNone && expected.document.sourceMaterial.isNone do
+      throw (IO.userError "classic reflection unexpectedly acquired generic source")
+    unless Lean.toExpr (classicTables Client.imported.document) == Lean.toExpr (classicTables expected.document) do
       throw (IO.userError "typed compiler tables changed during reflection")
     unless Client.imported.document.allocations.size == expected.document.allocations.size do
       throw (IO.userError "allocation count changed during reflection")
@@ -101,4 +105,24 @@ run_cmd do
     result = subprocess.run(["lake", "env", "lean", str(source)], cwd=root, text=True, capture_output=True)
     if result.returncode == 0 or "mismatch" not in result.stdout + result.stderr:
         raise SystemExit("kernel accepted a forged reflection success witness: " + result.stdout + result.stderr)
+    source.write_text(f'''import Miri.Frontend.ImportMIR
+open Lean Elab Command in
+run_cmd do
+  let decoded ← liftIO <| Miri.Input.decodeFile {json.dumps(scoped)}
+  let input ← match decoded with
+    | .ok value => pure value
+    | .error error => throwError "{{error}}"
+  -- Deliberately invalid source payload: presence alone must be rejected.
+  let material : Miri.Input.SourceMaterial := {{
+    target := {{ triple := "", architecture := "", dataLayout := "", pointerSizeBits := 0, endian := "" }}
+    declarations := #[], genericLayers := #[] }}
+  let input := {{ input with document := {{ input.document with sourceMaterial := some material }} }}
+  let rejected ← liftTermElabM do
+    try
+      let _ ← Miri.Frontend.quoteSchema12Input input
+      pure false
+    catch _ => pure true
+  unless rejected do throwError "generic source material was silently quoted as schema12"
+''')
+    subprocess.run(["lake", "env", "lean", str(source)], cwd=root, check=True)
     print("malformed input and forged success witness rejected")

@@ -98,7 +98,10 @@ def main (args : List String) : IO Unit := do
       | none, _ => none) found) (none : Option MIR.ConstOperand)
   let some actualConstant := actualConstant | throw (IO.userError "actual compiler constant operand was lost")
   let actualState := state
-  match (let .Val value ty := actualConstant.value; constValueToOp runtime (constantQueries program) value ty actualState) with
+  let result := match actualConstant.value with
+    | .Val value ty => constValueToOp runtime (constantQueries program) value ty actualState
+    | .SourceRequest .. => .error (.query "legacy fixture has no source constant World") actualState
+  match result with
   | .error error _ => throw (IO.userError (reprStr error))
   | .ok actual after =>
     match actual.op with

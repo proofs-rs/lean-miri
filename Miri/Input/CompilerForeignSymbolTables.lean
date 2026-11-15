@@ -1,4 +1,5 @@
 import Miri.Interpreter.ForeignItems
+import Miri.Input.CompilerSourceSymbols
 import Miri.Input.CompilerVTableRuntime
 import Miri.Input.CompilerCallPipeline
 
@@ -21,6 +22,8 @@ structure Candidate where
   spanHi : Nat
   kind : ForeignItems.ExportKind
   compilerBuiltins : Bool
+  /-- A symbolic source declaration, resolved only after symbol selection. -/
+  sourceDeclaration : Option SourceSymbols.Declaration := none
   deriving Repr, DecidableEq
 
 inductive AllocatorTarget where
@@ -57,36 +60,64 @@ private def allocatorTarget : Catalog.AllocatorTarget → Except String Allocato
     | "realloc" => pure (.special .Realloc)
     | _ => throw s!"unknown compiler special allocator method `{method}`"
 
+/-- Prepare declaration-derived names and source order without resolving any
+callable identity. The winner and its executable capabilities remain demands. -/
+def prepareSourceCandidates (material : SourceSymbols.Material) : Except String (Array Candidate) := do
+  let mut candidates : Array Candidate := #[]
+  let mut previousIndex : Option Nat := none
+  for declaration in material.declarations do
+    if let some previous := previousIndex then
+      unless previous < declaration.iterationIndex do throw "source exported iterator order is inconsistent"
+    previousIndex := some declaration.iterationIndex
+    let kind ← exportKind declaration.kind
+    let symbol ← CompilerSourceSymbols.symbol material.internalSymbolNamespace declaration
+    unless declaration.span.lo ≤ declaration.span.hi do throw "source exported span is reversed"
+    if let some linkage := declaration.attributes.linkage then
+      unless #["External","AvailableExternally","LinkOnceAny","LinkOnceODR","WeakAny","WeakODR",
+          "Appending","Internal","Private","ExternalWeak","Common"].contains linkage do
+        throw "source exported linkage kind unsupported"
+    candidates := candidates.push {
+      symbol, explicitSymbol := true, fnInstance := none
+      crateIndex := declaration.crateIndex, crateName := declaration.crateName
+      weak := declaration.attributes.linkage == some "WeakAny"
+      spanLo := declaration.span.lo, spanHi := declaration.span.hi, kind
+      compilerBuiltins := declaration.compilerBuiltins, sourceDeclaration := some declaration }
+  return candidates
+
 def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepared := do
   let program := instances.facts.context.program
   let source := program.input.queries.runtime.foreignSymbols
-  let some records := source.exportedCandidates | throw "compiler exported candidates absent"
   let ctx := LowerContext.ofDocument program.input
-  let mut candidates := #[]
-  let mut previousIndex : Option Nat := none
-  for record in records do
-    if let some previous := previousIndex then
-      unless previous < record.iterationIndex do
-        throw "exported symbol iterator order is missing or inconsistent"
-    previousIndex := some record.iterationIndex
-    let kind ← exportKind record.definitionKind
-    let callee ← if kind == .function || kind == .associatedFunction then do
-      let some id := record.instanceId | throw "exported callable instance absent"
-      let _ ← CompilerInstance.source ctx.instances id
-      pure (some id)
-    else pure none
-    let some span := program.input.spans[record.span]? | throw "exported symbol span ID out of bounds"
-    candidates := candidates.push {
-      symbol := record.symbol
-      explicitSymbol := record.explicitSymbol
-      fnInstance := callee
-      crateIndex := record.crateIndex
-      crateName := record.crateName
-      weak := record.weak
-      spanLo := span.lo
-      spanHi := span.hi
-      kind := kind
-      compilerBuiltins := record.compilerBuiltins }
+  let mut candidates : Array Candidate := #[]
+  match source.exportedCandidates, source.sourceDeclarations with
+  | some _, some _ => throw "foreign symbols have conflicting catalog and source declaration evidence"
+  | none, none => throw "compiler exported candidates absent"
+  | some records, none =>
+    let mut previousIndex : Option Nat := none
+    for record in records do
+      if let some previous := previousIndex then
+        unless previous < record.iterationIndex do
+          throw "exported symbol iterator order is missing or inconsistent"
+      previousIndex := some record.iterationIndex
+      let kind ← exportKind record.definitionKind
+      let callee ← if kind == .function || kind == .associatedFunction then do
+        let some id := record.instanceId | throw "exported callable instance absent"
+        let _ ← CompilerInstance.source ctx.instances id
+        pure (some id)
+      else pure none
+      let some span := program.input.spans[record.span]? | throw "exported symbol span ID out of bounds"
+      candidates := candidates.push {
+        symbol := record.symbol
+        explicitSymbol := record.explicitSymbol
+        fnInstance := callee
+        crateIndex := record.crateIndex
+        crateName := record.crateName
+        weak := record.weak
+        spanLo := span.lo
+        spanHi := span.hi
+        kind := kind
+        compilerBuiltins := record.compilerBuiltins }
+  | none, some material => candidates ← prepareSourceCandidates material
   let mut allocatorEntries := #[]
   for (symbol, target) in source.allocatorShims do
     let entry : AllocatorEntry := ⟨symbol, ← allocatorTarget target⟩
@@ -105,6 +136,11 @@ linked dependency order. Equal-strength duplicate definitions terminate. -/
 def lookup (prepared : Prepared) (symbol : String) : Except StepError (Option Candidate) := do
   let mut selected : Option Candidate := none
   for candidate in prepared.candidates do
+    if candidate.explicitSymbol then
+      if let some declaration := candidate.sourceDeclaration then
+        -- Upstream constructs mono identities before comparing each explicit
+        -- symbol. Validate its source slots here, but allocate no identity.
+        let _ ← (CompilerSourceSymbols.monoKey declaration).mapError StepError.unsupported
     if candidate.explicitSymbol && candidate.symbol == symbol then
       if let some previous := selected then
         match candidate.weak, previous.weak with
@@ -121,14 +157,21 @@ def lookup (prepared : Prepared) (symbol : String) : Except StepError (Option Ca
 CompilerCallPipeline operation, and its missing-body error is preserved. -/
 def lookupFunction (prepared : Prepared)
     (loadMir : CallInstance → EStateM StepError S LoadedBody)
-    (symbol : String) : EStateM StepError S (Option (LoadedBody × CallInstance)) := do
+    (symbol : String)
+    (resolveSource : SourceSymbols.Declaration → EStateM StepError S CallInstance :=
+      fun _ => throw (.unsupported "source callable requires the shared compiler World resolver")) :
+    EStateM StepError S (Option (LoadedBody × CallInstance)) := do
   let candidate? ← match lookup prepared symbol with
     | .ok result => pure result
     | .error error => throw error
   let some candidate := candidate? | return none
   if candidate.kind != .function && candidate.kind != .associatedFunction then
     throw (.undefinedBehavior "attempt to call an exported symbol that is not defined as a function")
-  let some fnInstance := candidate.fnInstance | throw (.unsupported "callable exported symbol has no compiler instance identity")
+  let fnInstance ← match candidate.fnInstance, candidate.sourceDeclaration with
+    | some id, none => pure id
+    | none, some declaration => resolveSource declaration
+    | some _, some _ => throw (.invalidProgram "exported callable has conflicting source identities")
+    | none, none => throw (.unsupported "callable exported symbol has no compiler instance identity")
   return some (← loadMir fnInstance,fnInstance)
 
 def allocatorSymbol (prepared : Prepared) (symbol : String) :

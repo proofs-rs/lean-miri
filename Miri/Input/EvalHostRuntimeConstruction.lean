@@ -139,12 +139,7 @@ def osStrings [DecidableEq MiriMemoryKind]
     writeCString := RawMemoryMachine.writeCString access pointer.arithmetic
     writeWideString := OsStringMachine.writeWideString osPointer
     arrayLayout := fun wide count => do
-      let state ← get
-      match RuntimeArrayTypes.osStringArray (arrays.get state) wide count with
-      | .error error => throw (.unsupported s!"runtime OS-string array layout: {reprStr error}")
-      | .ok (layout,world) =>
-        set (arrays.set state world)
-        pure layout
+      RuntimeArrayQueries.osStringArray arrays wide count
     allocate := fun layout kind => do
       unless layout.layout.isSized do throw (.invalidProgram "unsized OS-string array allocation")
       let result ← ReallocationDriver.allocateConfigured allocation layout.layout.size

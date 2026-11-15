@@ -16,4 +16,6 @@ miri = { path = "../upstream/miri-source", default-features = false, optional = 
 
 [features]
 default = []
+# Requires the pinned observation-only compiler accessor.
+allocation-identity-snapshot = []
 miri-reference = ["dep:miri"]

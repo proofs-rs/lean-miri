@@ -16,6 +16,12 @@ private def project (value : Except ProjectionError A) : EStateM StepError S A :
   match value with | .ok value => pure value | .error error => throw (IntrinsicVectorMachine.projectionError error)
 
 def arrays : RuntimeArrayQueries.Access (Machine Os R P H D O Aff B Host) where
+  sourceCompiler := some {
+    get := fun machine => machine.user.payload.payload.user.sourceCompiler
+    put := fun machine compiler => {machine with user := {machine.user with payload :=
+      {machine.user.payload with payload := {machine.user.payload.payload with user :=
+        {machine.user.payload.payload.user with sourceCompiler := some compiler}}}}} }
+
   get := fun s => s.user.payload.payload.user.types
   set := fun s types => {s with user := {s.user with payload := {s.user.payload with payload :=
     {s.user.payload.payload with user := {s.user.payload.payload.user with types}}}}}

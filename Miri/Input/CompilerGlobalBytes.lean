@@ -12,6 +12,7 @@ open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 structure Prepared where
   strType : TyId
   keys : Array (Array UInt8 × Fin 32 × AllocId)
+  evidenceAvailable : Bool := true
 
 private def hexBytes (value : String) : Except String (Array UInt8) := do
   let chars := value.toList.toArray
@@ -58,6 +59,11 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
   if memory.byteGlobalKeysReady || !memory.byteGlobalKeys.isEmpty then
     throw "global byte keys already initialized"
   let source := program.input.queries.globalBytes
+  source.validateAvailability
+  unless source.evidenceAvailable do
+    let node ← runtime.node source.strType |>.mapError toString
+    unless node.shapeKind == .str do throw "unavailable byte interner str type is not str"
+    return {strType := source.strType,keys := #[],evidenceAvailable := false}
   unless source.saltCount == 32 do throw "global byte salt support differs from pinned source"
   let mut keys := #[]
   if let some world := program.input.compilerAllocIdWorld then
@@ -128,15 +134,18 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
   let node ← runtime.node strType |>.mapError toString
   unless node.shapeKind == .str do
     throw "global byte str type is not the compiler str primitive"
-  pure ⟨strType,keys⟩
+  pure {strType,keys}
 
 def attachProfiled (profile : Lean.Options) (program : LoweredProgram) (runtime : RuntimeMetadata) : MachineHooks.M K U Prepared := do
   let state ← get
   let prepared ← match profileit "startup.alloc_bytes" profile fun _ =>
       prepare program runtime state.machine.memory with
     | .ok value => pure value | .error error => throw (.unsupported error)
-  modify fun state => {state with machine := {state.machine with memory :=
-    {state.machine.memory with byteGlobalKeys := prepared.keys, byteGlobalKeysReady := true}}}
+  if prepared.evidenceAvailable then
+    modify fun state => {state with machine := {state.machine with memory :=
+      {state.machine.memory with byteGlobalKeys := prepared.keys, byteGlobalKeysReady := true}}}
+  -- Unavailable is a deferred capability, not a known empty key table.
+  -- GlobalByteMachine.reserve retains its unchanged readiness rejection.
   pure prepared
 
 def attach (program : LoweredProgram) (runtime : RuntimeMetadata) :

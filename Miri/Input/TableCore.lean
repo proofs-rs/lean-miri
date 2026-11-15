@@ -1102,4 +1102,6 @@ def parseTypeNode (path : String := "$parseTypeNode")
   liftExcept (LocalValidation.validateType node)
   pure node
 
+def decodeCompilerReprOptions : Parser ReprOptions := parseReprOptions
+
 end Miri.Input.DecoderValues

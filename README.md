@@ -61,6 +61,27 @@ with status zero even when the guest does not complete, so its process exit code
 alone is insufficient. Proving safety requires a Lean theorem covering all
 permitted executions.
 
+### Finite generic material
+
+The migration toward demand-time compiler queries has an experimental
+`--foundation` export mode. For example:
+
+```bash
+bash tools/export-mir.sh --output scratch/identity-foundation.json \
+  --foundation --root identity -- exporter/fixtures/foundation.rs \
+  --crate-type=lib --crate-name=foundation
+```
+
+This retains generic MIR and finite type, definition and target material.
+The normal runner decodes it into typed source material and uses one persistent
+compiler World to derive demanded instances, bodies, types and ABIs in Lean.
+It executes through the existing fixed interpreter, without runtime rustc calls
+or pre-enumerated monomorphic call answers. Supported custom-entry programs run
+through finalization; ordinary std main is still incomplete. Unsupported demands
+stop explicitly, and concrete runs are not safety proofs. See the
+[architecture and current boundary](docs/foundation-architecture.md) and
+[remaining work](STATUS.md).
+
 ### Work with the input in Lean
 
 To inspect a single function, export the included `add_one` example with `--root`.

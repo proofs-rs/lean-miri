@@ -562,8 +562,10 @@ def globalBytes : Parser (GlobalBytes) := do
   let strType ← need fields.strType "str_type"
   let coveredAllocations ← need fields.coveredAllocations "covered_allocation_ids"
   let candidates ← need fields.candidates "candidates"
+  -- Schemas 11/12 require concrete salt evidence; deferred capabilities are
+  -- internal finite-source values, not a reinterpretation of absent JSON data.
   return {
-    saltCount, strType, coveredAllocations, candidates }
+    saltCount, strType, coveredAllocations, candidates, evidenceAvailable := true }
 
 private structure globalQueryFields where
   typeId : Option (Nat) := none

@@ -22,7 +22,8 @@ private def memory (place : RuntimePlace Provenance) : MachineHooks.M K U (MPlac
   | .local .. => throw (.invalidProgram "freeze projection returned a local place")
 
 def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
-    (runtime : CompilerRuntimeQueries.Prepared) (leaves : Leaves K U)
+    (runtime : CompilerRuntimeQueries.Prepared)
+    (world : SourceCompilerWorld.Access (ValidityMachine.State K U)) (leaves : Leaves K U)
     (access : ValidityMachine.Access K U)
     (projection : PlaceProjectionHooks Provenance (ValidityMachine.State K U) C MachineHooks.FrameExtra)
     (vtable : VTableHooks Provenance (ValidityMachine.State K U) C F A)
@@ -32,7 +33,7 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
   let dynamic := PlaceDynamic.withVTable projection.dynamic vtable
   let size := fun (place : MPlaceTy Provenance) =>
     DynamicLayout.sizeAndAlignFromMeta dynamic choice projection.dynamicFuel place.mplace.metadata place.layout
-  {
+  CompilerRetagWorld.hooks prepared world {
     instanceDefinition := fun inst => lift (CompilerInstance.definitionOf context.loweringContext.instances inst)
     typeShape := fun ty => lift (CompilerFacts.retagTypeShape context ty)
     builtinDeref := fun ty => lift (CompilerFacts.requiredType context ty "builtin_deref_explicit")
@@ -43,7 +44,7 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
     implicitWrites := leaves.implicitWrites
     rustcNoWritable := leaves.rustcNoWritable
     preciseInteriorMut := leaves.preciseInteriorMut
-    immPtrToMPlace := PointerPlaceMachine.fromImmediate access (CompilerExecutionProviders.pointerCompiler prepared) choice
+    immPtrToMPlace := PointerPlaceMachine.fromImmediate access (CompilerExecutionProviders.pointerCompiler prepared world) choice
     sizeAndAlign := size
     checkPtrAccess := ValidityMachine.checkPointerAccess access
     resolveAllocation := TypedValidityProviders.resolveAllocation pointers
@@ -76,8 +77,7 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
           ⟨.memory place.mplace,place.layout⟩
         pure (← memory pointer,← memory allocator)
       unpackDynTrait := fun place => do
-        let .dynamic expected ← lift (CompilerFactAdapters.validityKind prepared place.layout.ty)
-          | throw (.invalidProgram "freeze dyn unpack on non-dynamic compiler type")
+        let expected ← CompilerRetagWorld.dynamicPredicates prepared world place.layout.ty
         let inner ← VTable.unpackDynTrait vtable choice ⟨.indirect place.mplace,place.layout⟩ expected
         let .indirect memory := inner.op | throw (.invalidProgram "dynamic unpack returned immediate")
         pure ⟨memory,inner.layout⟩ } }

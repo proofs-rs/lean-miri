@@ -256,12 +256,33 @@ inductive PointerInput (s : Static) (before : State) (tracker : MachineHooks.Bor
         before.machine.user.addresses.exposed.contains row.allocId = true →
         WildcardCandidate before pointer row → Backing s before row.allocId)
 
-/-- Pure compiler binding for an arbitrary current caller and its resolved
-local type. Neither query executes a memory/call/retag operation. -/
-structure LocalMetadata (s : Static) (caller : F) (id : LocalId) (layout : LocalLayout) where
+/-- The actual current World binds the caller's full-instance/body identity to
+its local type. These are pure data queries; no memory/call/retag success is
+assumed, and metadata in a different saved compiler dictionary is insufficient. -/
+structure LocalMetadata (s : Static) (before : State) (caller : F) (id : LocalId) (layout : LocalLayout) where
+  compilerWorld : Input.SourceCompilerWorld.World
+  currentWorld : Input.EvalCoreMachine.sourceCompilerAccess.get before = some compilerWorld
   normalizedTy : TyId
-  normalization : Input.CompilerFrameContext.localType s.prepared.compiler caller id = .ok normalizedTy
-  lookup : s.prepared.compiler.runtime.lookup normalizedTy = .ok layout
+  normalization : Input.CompilerFrameContext.localType compilerWorld caller id = .ok normalizedTy
+  lookup : ({s.prepared.compiler.runtime with source := compilerWorld.canonical}).lookup normalizedTy = .ok layout
+
+/-- Recover the live local query from canonical instance/body rows and the
+actual MIR local edge. Every hypothesis identifies stored data; no runtime
+operation is assumed successful. -/
+theorem localType_of_canonical_body (world : Input.SourceCompilerWorld.World)
+    (caller : F) (node : Input.InstanceNode) (body : Input.Body) (id : LocalId) (ty : TyId)
+    (instanceAt : world.canonical.instances[caller.functionInstance]? = some node)
+    (instanceIdentity : node.id = caller.functionInstance)
+    (executable : node.kind = .instanceMir)
+    (bodyReference : node.bodyId = some caller.bodyIdentity.index)
+    (bodyAt : world.canonical.bodies[caller.bodyIdentity.index]? = some body)
+    (owner : body.instanceId = caller.functionInstance) (contents : body.mir = caller.body)
+    (edge : caller.body.locals[id]? = some ty) :
+    Input.CompilerFrameContext.localType world caller id = .ok ty := by
+  simp [Input.CompilerFrameContext.localType, Input.CompilerFrameContext.worldBodyOfFrame,
+    Input.SourceCompilerFrame.body, Input.SourceCompilerWorld.bodyId, Input.SourceCompilerWorld.node,
+    instanceAt, instanceIdentity, executable, bodyReference, bodyAt, owner, contents, edge]
+  rfl
 
 /-- Raw extent of an existing nonzero enclosing local's indirect backing.
 The wildcard attribution is expressed with current inverse rows and addresses,
@@ -327,7 +348,7 @@ structure LocalDestination (s : Static) (p : Packet)
   baseLayout : LocalLayout
   slot : LocalState Provenance LocalLayout
   slotAt : caller.locals[localId]? = some slot
-  metadata : LocalMetadata s caller localId baseLayout
+  metadata : LocalMetadata s p.before caller localId baseLayout
   cache : slot.layout = none ∨ slot.layout = some baseLayout
   baseSized : baseLayout.layout.isSized = true
   baseSigned : baseLayout.layout.size.bytes.toNat < 2^63

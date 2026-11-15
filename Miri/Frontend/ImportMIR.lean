@@ -186,6 +186,11 @@ deriving instance ToExpr for Input.AbiPassMode
 deriving instance ToExpr for Input.AbiArgument
 deriving instance ToExpr for Input.FunctionAbi
 deriving instance ToExpr for Input.DefinitionId
+deriving instance ToExpr for Input.SourceSymbols.ParameterKind
+deriving instance ToExpr for Input.SourceSymbols.Attributes
+deriving instance ToExpr for Input.SourceSymbols.Span
+deriving instance ToExpr for Input.SourceSymbols.Declaration
+deriving instance ToExpr for Input.SourceSymbols.Material
 deriving instance ToExpr for Input.VtableEntryKind
 deriving instance ToExpr for Input.VtablePredicateKind
 deriving instance ToExpr for Input.FunctionAllocation
@@ -281,8 +286,45 @@ deriving instance ToExpr for Input.CoroutineLayoutEvidence
 deriving instance ToExpr for Input.CoroutineEvidence
 deriving instance ToExpr for Input.CoroutineAuxiliaryBody
 deriving instance ToExpr for Input.CoroutineCoverage
-deriving instance ToExpr for Input.ImportDocument
-deriving instance ToExpr for Input.ExecutionInput
+/-- The import macro accepts classic schema-12 input, whose sourceMaterial is
+None. Quotation preserves all of that input; typed generic source is rejected
+explicitly rather than silently discarded or given a fabricated value. The
+field-order check makes a later ImportDocument schema extension fail closed.
+Final declarations are kernel-checked after the existing bounded chunking. -/
+def quoteSchema12Input (input : Input.ExecutionInput) : MetaM Expr := do
+  let document := input.document
+  if document.sourceMaterial.isSome then
+    throwError "import_mir cannot quote typed generic source material; schema-12 input is required"
+  let absentSource := mkApp (mkConst ``Option.none [Level.zero]) (mkConst ``Input.SourceMaterial)
+  let fields : Array (String × Expr) := #[
+    ("compilerPredicates", toExpr document.compilerPredicates),
+    ("compilerAbiLayoutSchema", toExpr document.compilerAbiLayoutSchema),
+    ("producer", toExpr document.producer),
+    ("runtimeTargetDataLayout", toExpr document.runtimeTargetDataLayout),
+    ("predicates", toExpr document.predicates),
+    ("definitions", toExpr document.definitions),
+    ("typeConstants", toExpr document.typeConstants),
+    ("layouts", toExpr document.layouts),
+    ("files", toExpr document.files),
+    ("spans", toExpr document.spans),
+    ("types", toExpr document.types),
+    ("allocations", toExpr document.allocations),
+    ("compilerAllocIdWorld", toExpr document.compilerAllocIdWorld),
+    ("instances", toExpr document.instances),
+    ("selectedScope", toExpr document.selectedScope),
+    ("functionAbis", toExpr document.functionAbis),
+    ("bodyRoots", toExpr document.bodyRoots),
+    ("bodies", toExpr document.bodies),
+    ("coroutineCoverage", toExpr document.coroutineCoverage),
+    ("queries", toExpr document.queries),
+    ("producerSettings", toExpr document.producerSettings),
+    ("sourceMaterial", absentSource)]
+  let some info := getStructureInfo? (← getEnv) ``Input.ImportDocument
+    | throwError "import_mir document constructor metadata is unavailable"
+  unless info.fieldNames == fields.map (fun field => Name.mkSimple field.1) do
+    throwError "import_mir document schema changed; quotation field order must be updated"
+  let value := mkAppN (mkConst ``Input.ImportDocument.mk) (fields.map Prod.snd)
+  return mkApp (mkConst ``Input.ExecutionInput.mk) value
 
 private def addAuxDefinition (name : Name) (type value : Expr) : MetaM Unit := do
   let declaration := Declaration.defnDecl {
@@ -339,7 +381,8 @@ elab_rules : command
     -- Thousands of auxiliary definitions must not each retain an asynchronous
     -- environment snapshot until the end of this single command.
     let (value, _) ← liftTermElabM <| withOptions (Elab.async.set · false) do
-      (splitValue declName (toExpr result)).run' {}
+      let expression ← quoteSchema12Input result
+      (splitValue declName expression).run' {}
     liftCoreM <| withOptions (Elab.async.set · false) <| addAndCompile <| .defnDecl {
       name := declName
       levelParams := []
