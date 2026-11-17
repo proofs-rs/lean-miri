@@ -354,7 +354,7 @@ def main (args : List String) : IO Unit := do
   let unknown := runRvalue (ScalarOps.binary (scalarHooks metadata) () .Add
     ⟨.uninit, { returnedLayout with ty := 999999 }⟩ ⟨.uninit, returnedLayout⟩) initial
   check (!unknown.2.isOk) "unknown type accepted"
-  let missing := { metadata with source := { metadata.source with types := #[] } }
+  let missing : Miri.Input.RuntimeMetadata := { source := { metadata.source with types := #[] }, target := metadata.target }
   let rejected := execute missing 100 initial
   check (!rejected.2.isOk) "missing type declarations accepted"
   IO.println "returned=42"

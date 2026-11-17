@@ -41,6 +41,26 @@ state/caches are not shared between runs. Earlier wire formats require fresh
 export. Historical schema-7 through schema-12 results below do not validate this
 breaking input/provider change.
 
+Each execution builds its own lazy layout table and empty-extra instance-ABI
+table from the validated provider materials. Unused slots do not evaluate a
+query. Nonempty extra arguments and arbitrary signature ABI requests retain
+canonical calculation. Kernel lemmas show that cached successes and errors equal
+the canonical queries; native sharing and session isolation have separate finite
+regressions. This adds no compiler-query equivalence or whole-machine theorem.
+
+Three alternating fresh export-to-result pairs against main `3a660af6` use the
+same exporter, Rust input, seed, CPU affinity and one Lean thread. A 16-element
+Vec sort repeated six times has Lean wall median 26.497 to 24.256 seconds
+(ranges 26.260–26.628 and 23.793–24.416); CPU median is 26.326 to 24.140 seconds.
+Ordinary std startup has overlapping Lean ranges (4.953–5.461 and 4.832–5.288)
+and supplies no small-speedup claim. All twelve trials have identical input,
+output and runtime profiles within each workload, and no cgroup throttling.
+Exporter timings also differ despite identical binaries, so total pipeline
+differences are not attributed wholly to memoization. Peak Lean RSS is
+495.24/496.96 MB for the sort and 464.95/472.63 MB for startup; memory reduction
+is not claimed. These finite shared-host observations do not establish general
+query-performance bounds.
+
 rustc MIR transformation, normalization and constant evaluation remain trusted.
 Additional trusted finite facts include target/declaration attributes, source-map
 expansion/remap/display positions, inferred variance, type identity and bound-variable flags, compiler coroutine state
@@ -129,12 +149,16 @@ premises are unchanged. At main `c8daa215`, the committed schema-11 input passed
 all 268 proof modules and the 77,958-declaration transitive axiom audit.
 Separately, the schema-16 fixture passes the canonical checker on its actual
 input path with the current compiler/Miri pins: all 268 modules, the final
-`target`/`noUB` types, and 78,270 imported declarations including private/generated
+`target`/`noUB` types, and 78,308 imported declarations including private/generated
 declarations. Only `propext`, `Classical.choice` and `Quot.sound` occur.
 Input, example and library-source hashes remained unchanged during the successful
 check; the compiled proof artifacts are recorded separately.
 The `EmptyFunctionQueries` executable separately passes actual layout/ABI/trait
 provider assertions; it supplies no theorem premise or safety verdict.
+The per-run memo implementation also passes a separate 268-module final proof
+and the same 78,308-declaration audit on fresh schema-16 exporter output from the
+maintained Rust source and export flags. The committed fixture and this fresh
+input were checked independently; neither result extends the caller domain.
 
 ## Remaining general proofs (not acceptance conditions for current finite QA)
 

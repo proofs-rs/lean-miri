@@ -25,7 +25,7 @@ def kind (prepared : Prepared) (ty : MIR.TyId) : Except String CallFunctionKind 
 def pointerAbi (prepared : Prepared) (ty : MIR.TyId) (extra : Array MIR.TyId) : Except String (FnAbi MIR.TyId) := do
   let node ← prepared.runtime.node ty |>.mapError toString
   let .functionPointer signature _ := node.shape | throw "FnPtr ABI requested for non-pointer type"
-  SourceAbiRuntime.ofSignature ⟨prepared.runtime, prepared.program, none⟩ signature extra
+  SourceAbiRuntime.ofSignature prepared.runtime signature extra
 
 def hooks (prepared : Prepared) (extern : ABI.ExternAbi → Except String Extern)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :

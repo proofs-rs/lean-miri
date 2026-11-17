@@ -1,66 +1,67 @@
 import Miri.Input.SourceAbi
-import Miri.Input.CompilerFacts
+import Miri.Input.ConcreteTypeQueries
 
 namespace Miri.Input.SourceAbiRuntime
 open Miri.ABI
 
-def pointeeInfo (context : CompilerFacts.Context) (policy : SourceAbiPolicy)
+def pointeeInfo (runtime : RuntimeMetadata) (policy : SourceAbiPolicy)
     (layout : TyAndLayout TypeId) (offset : Size) : Except String (Option SourceAbi.PointeeInfo) :=
-  go (2 * context.runtime.source.types.size + 2) layout offset
+  go (2 * runtime.source.types.size + 2) layout offset
 where
   go (fuel : Nat) (layout : TyAndLayout TypeId) (offset : Size) :
       Except String (Option SourceAbi.PointeeInfo) := do
     let .succ fuel := fuel | throw "recursive source layout in pointee-info calculation"
-    let node ← context.runtime.node layout.ty |>.mapError toString
+    let node ← runtime.node layout.ty |>.mapError toString
     match node.shape with
     | .rawPointer .. | .functionPointer .. =>
       if offset.bytes == 0 then return some ⟨Size.ZERO, Align.ONE, none⟩
     | .reference pointee mutability _ =>
       if offset.bytes == 0 then
-        let pointee ← context.runtime.lookup pointee |>.mapError toString
+        let pointee ← runtime.lookup pointee |>.mapError toString
         match mutability with
         | .Not =>
           let frozen ← if policy.optimize then
-            CompilerFacts.boolean context pointee.ty "is_freeze" else pure false
+            ConcreteTypeQueries.boolean runtime pointee.ty "is_freeze" else pure false
           return some ⟨if frozen then pointee.layout.size else Size.ZERO,
             pointee.layout.align.abi, some (.shared frozen)⟩
         | .Mut =>
           let unpin ← if policy.optimize then do
-            if !(← CompilerFacts.boolean context pointee.ty "is_unpin") then pure false
-            else CompilerFacts.boolean context pointee.ty "is_unsafe_unpin"
+            if !(← ConcreteTypeQueries.boolean runtime pointee.ty "is_unpin") then pure false
+            else ConcreteTypeQueries.boolean runtime pointee.ty "is_unsafe_unpin"
             else pure false
           return some ⟨if unpin then pointee.layout.size else Size.ZERO,
             pointee.layout.align.abi, some (.mutable unpin)⟩
     | _ => pure ()
-    if offset.bytes == 0 && (← CompilerFacts.boolean context layout.ty "is_box") then
-      let pointeeId ← CompilerFacts.requiredType context layout.ty "boxed_type"
-      let pointee ← context.runtime.lookup pointeeId |>.mapError toString
+    if offset.bytes == 0 && (← ConcreteTypeQueries.boolean runtime layout.ty "is_box") then
+      let some pointeeId ← ConcreteTypeQueries.optionalType runtime layout.ty "boxed_type"
+        | throw "compiler query boxed_type returned None"
+      let pointee ← runtime.lookup pointeeId |>.mapError toString
       let unpin ← if policy.optimize then do
-        if !(← CompilerFacts.boolean context pointeeId "is_unpin") then pure false
-        else CompilerFacts.boolean context pointeeId "is_unsafe_unpin"
+        if !(← ConcreteTypeQueries.boolean runtime pointeeId "is_unpin") then pure false
+        else ConcreteTypeQueries.boolean runtime pointeeId "is_unsafe_unpin"
         else pure false
       return some ⟨if unpin then pointee.layout.size else Size.ZERO,
-        pointee.layout.align.abi, some (.box unpin (← CompilerFacts.boolean context layout.ty "is_global_box"))⟩
+        pointee.layout.align.abi, some (.box unpin (← ConcreteTypeQueries.boolean runtime layout.ty "is_global_box"))⟩
     let variant ← match layout.layout.variants with
       | .Multiple _ (.Niche untagged _ _ start) field variants =>
         let fieldOffset ← layout.layout.fields.offset field |>.mapError reprStr
         if variants.size == 2 && fieldOffset == offset && start == 0 then
-          some <$> (context.runtime.forVariant layout untagged |>.mapError toString)
+          some <$> (runtime.forVariant layout untagged |>.mapError toString)
         else pure none
       | .Multiple .. => pure none
       | _ => pure (some layout)
     let mut result := none
     if let some variant := variant then
       if !(match variant.layout.fields with | .Union _ => true | _ => false) then
-        let pointerEnd := offset.bytes + context.runtime.target.defaultAddressSpacePointerSpec.pointerSize.bytes
+        let pointerEnd := offset.bytes + runtime.target.defaultAddressSpacePointerSpec.pointerSize.bytes
         for index in [:variant.layout.fields.count] do
           let start ← variant.layout.fields.offset index |>.mapError reprStr
           if start.bytes <= offset.bytes then
-            let field ← context.runtime.field variant index |>.mapError toString
+            let field ← runtime.field variant index |>.mapError toString
             if pointerEnd <= start.bytes + field.layout.size.bytes then
               result ← go fuel field (Size.ofBytes (offset.bytes - start.bytes))
               if result.isSome then break
-    if (← CompilerFacts.boolean context layout.ty "is_like_maybe_dangling") then
+    if (← ConcreteTypeQueries.boolean runtime layout.ty "is_like_maybe_dangling") then
       result := result.map fun info => {info with safe := none, size := Size.ZERO}
     return result
 
@@ -117,33 +118,33 @@ where
     let some field := selected | return node.sourceLayout.isX87F80
     peel fuel field
 
-def queries (context : CompilerFacts.Context) (policy : SourceAbiPolicy) : SourceAbi.Queries := {
-  typeCount := context.runtime.source.types.size
-  lookup := fun ty => context.runtime.lookup ty |>.mapError toString
-  field := fun layout index => context.runtime.field layout index |>.mapError toString
-  variant := fun layout index => context.runtime.forVariant layout index |>.mapError toString
-  pointeeInfo := pointeeInfo context policy
+def queries (runtime : RuntimeMetadata) (policy : SourceAbiPolicy) : SourceAbi.Queries := {
+  typeCount := runtime.source.types.size
+  lookup := fun ty => runtime.lookup ty |>.mapError toString
+  field := fun layout index => runtime.field layout index |>.mapError toString
+  variant := fun layout index => runtime.forVariant layout index |>.mapError toString
+  pointeeInfo := pointeeInfo runtime policy
   passIndirectlyInNonRusticAbis := fun ty => do
-    let node ← context.runtime.node ty |>.mapError toString
+    let node ← runtime.node ty |>.mapError toString
     return match node.shape with
       | .adt data => data.representation.flagsBits &&& 32 != 0
       | _ => false
-  thinSelf := thinSelf context.runtime
-  isX87F80 := isX87F80 context.runtime }
+  thinSelf := thinSelf runtime
+  isX87F80 := isX87F80 runtime }
 
-def ofSignature (context : CompilerFacts.Context) (signature : FunctionSignature)
+def ofSignature (runtime : RuntimeMetadata) (signature : FunctionSignature)
     (extra : Array TypeId := #[]) : Except String (FnAbi TypeId) := do
-  let some material := context.runtime.source.sourceAbi | throw "missing source ABI material"
-  SourceAbi.compute material.policy context.runtime.target (queries context material.policy) signature extra
+  let some material := runtime.source.sourceAbi | throw "missing source ABI material"
+  SourceAbi.compute material.policy runtime.target (queries runtime material.policy) signature extra
 
-def ofInstance (context : CompilerFacts.Context) (instanceId : InstanceId)
+def ofInstance (runtime : RuntimeMetadata) (instanceId : InstanceId)
     (extra : Array TypeId) : Except String (FnAbi TypeId) := do
-  let some material := context.runtime.source.sourceAbi | throw "missing source ABI material"
+  let some material := runtime.source.sourceAbi | throw "missing source ABI material"
   let some definition := material.definitions[instanceId]?.getD none
     | throw "missing concrete instance source ABI signature"
-  let some node := context.runtime.source.instances[instanceId]? | throw "missing ABI instance"
+  let some node := runtime.source.instances[instanceId]? | throw "missing ABI instance"
   let item := match node.instanceKind with | .Item _ => true | _ => false
-  SourceAbi.compute material.policy context.runtime.target (queries context material.policy)
+  SourceAbi.compute material.policy runtime.target (queries runtime material.policy)
     definition.signature extra (some definition) item
 
 end Miri.Input.SourceAbiRuntime

@@ -201,6 +201,7 @@ def runFromInitial
     Except StepError
       (EvalRunConstruction.RunResult
         (State Os R H D B Poll Instant System Native Profiler Raw Listener TcpStream Error)) := Id.run do
+  let prepared := {prepared with compiler := prepared.compiler.startSession}
   if initialConfiguration.geometry.pageSize != sourceLeaves.foreignSource.geometry.pageSize ||
       initialConfiguration.geometry.stackAddress != sourceLeaves.foreignSource.geometry.stackAddress ||
       initialConfiguration.geometry.stackSize != sourceLeaves.foreignSource.geometry.stackSize ||

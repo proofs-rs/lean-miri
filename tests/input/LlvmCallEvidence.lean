@@ -78,7 +78,7 @@ def main (args : List String) : IO Unit := do
     "LLVM intrinsic accepted an ordinary source ABI definition"
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   let originalProgram ← must (lowerProgram decoded.document)
-  rejects (SourceAbiRuntime.ofInstance ⟨runtime, originalProgram, none⟩ llvmId #[])
+  rejects (SourceAbiRuntime.ofInstance runtime llvmId #[])
     "LLVM intrinsic source ABI demand silently succeeded"
   let runtimeQueries ← must (CompilerRuntimeQueries.prepare originalProgram)
   check (!(← must (CompilerRuntimeQueries.requiresCallerLocation runtimeQueries llvmId)))

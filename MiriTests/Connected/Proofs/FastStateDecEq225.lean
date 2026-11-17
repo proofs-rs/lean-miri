@@ -15,8 +15,8 @@ def importDocumentCorePointerDecEq : DecidableEq Input.ImportDocument :=
 
 attribute [-instance] Miri.Verification.RuntimeDocumentExact207.instDecidableEqRuntimeMetadata_miriTests
 local instance importDocumentCoreFast : DecidableEq Input.ImportDocument := importDocumentCorePointerDecEq
-deriving instance DecidableEq for Input.RuntimeMetadata
-private def runtimeMetadataStructuralDecEq : DecidableEq Input.RuntimeMetadata := inferInstance
+private def runtimeMetadataStructuralDecEq : DecidableEq Input.RuntimeMetadata :=
+  Miri.Verification.RuntimeDocumentExact207.runtimeMetadataDecidableEq importDocumentCorePointerDecEq
 def runtimeMetadataPointerDecEq : DecidableEq Input.RuntimeMetadata :=
   fun left right => withPtrEqDecEq left right (fun _ => runtimeMetadataStructuralDecEq left right)
 

@@ -472,6 +472,7 @@ def runFromInitialProfiled
         (EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
           (EvalUnixSourceConstruction.Other Raw Listener TcpStream Error) CpuAffinity.Mask B
           Poll Instant System Native Profiler)) := Id.run do
+  let prepared := {prepared with compiler := prepared.compiler.startSession}
   let compiler := prepared.compiler
   if initialConfiguration.geometry.pageSize != sourceLeaves.foreignSource.geometry.pageSize ||
       initialConfiguration.geometry.stackAddress != sourceLeaves.foreignSource.geometry.stackAddress ||

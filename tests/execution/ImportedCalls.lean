@@ -322,7 +322,7 @@ private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except Ste
 private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
   let (resolution, id) ← lift (resolutionFor p fnInstance)
   let .normal := resolution.abi | throw (.unsupported "LLVM intrinsic has no ordinary FnABI")
-  let source ← lift ((Input.SourceAbiRuntime.ofInstance ⟨p.metadata, p.lowered, none⟩ id #[])
+  let source ← lift ((Input.SourceAbiRuntime.ofInstance p.metadata id #[])
     |>.mapError StepError.unsupported)
   if source.conv != .Rust || source.cVariadic then
     block "unsupported calling convention or varargs"

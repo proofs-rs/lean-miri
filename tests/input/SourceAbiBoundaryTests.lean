@@ -44,13 +44,11 @@ def main (args : List String) : IO Unit := do
   let policy ← must (source.getObjVal? "policy")
   let invalidAlignment ← must (setField policy "max_reliable_alignment" (toJson (3 : Nat)))
   reject (← must (setField source "policy" invalidAlignment)) "non-power-of-two ABI alignment accepted"
-  let program ← must (lowerProgram document)
   let runtime ← must (RuntimeMetadata.ofDocument document |>.mapError toString)
-  let _ ← must (SourceAbiRuntime.ofInstance ⟨runtime, program, none⟩ selected.instanceId #[])
-  let context : CompilerFacts.Context := ⟨runtime, program, none⟩
+  let _ ← must (SourceAbiRuntime.ofInstance runtime selected.instanceId #[])
   let layout ← must (runtime.lookup selected.signature.output |>.mapError toString)
   let layout := {layout with layout := {layout.layout with size := Miri.ABI.Size.ofBytes 32, backendRepr := .Memory (sized := true)}}
-  let queries := {SourceAbiRuntime.queries context material.policy with lookup := fun _ => pure layout}
+  let queries := {SourceAbiRuntime.queries runtime material.policy with lookup := fun _ => pure layout}
   let signature := {selected.signature with inputs := #[layout.ty], output := layout.ty, abi := .Rust}
   let definition := {selected with signature, virtualCall := false, callerLocation := none}
   for optimize in #[false, true] do
@@ -59,7 +57,8 @@ def main (args : List String) : IO Unit := do
       let .Indirect attrs _ _ := argument.mode | throw (IO.userError "large aggregate did not use indirect ABI")
       check (attrs.regular == 670) "Miri ABI acquired codegen body-deduced attributes"
   let incomplete := {material with definitions := material.definitions.set! selected.instanceId none}
-  let incompleteRuntime := {runtime with source := {document with sourceAbi := some incomplete}}
-  check (!(SourceAbiRuntime.ofInstance ⟨incompleteRuntime, program, none⟩ selected.instanceId #[]).isOk)
+  let incompleteRuntime ← must (RuntimeMetadata.ofDocument
+    {document with sourceAbi := some incomplete} |>.mapError toString)
+  check (!(SourceAbiRuntime.ofInstance incompleteRuntime selected.instanceId #[]).isOk)
     "missing concrete ABI source silently fell back to an answer table"
   IO.println "source ABI boundary: required material, dense identities, type references, policy and no-body-deduced attributes checked; missing source fails at demand"

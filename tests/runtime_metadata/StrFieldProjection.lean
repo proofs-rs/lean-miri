@@ -14,7 +14,7 @@ private def fieldAt (runtime : RuntimeMetadata) (strId index : Nat) : Except Str
   (runtime.field parent index).mapError toString
 
 private def withNodes (runtime : RuntimeMetadata) (nodes : Array TypeNode) : RuntimeMetadata :=
-  { runtime with source := { runtime.source with types := nodes } }
+  { source := { runtime.source with types := nodes }, target := runtime.target }
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected fresh str_field exporter input")

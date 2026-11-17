@@ -142,7 +142,7 @@ def resolveAt (prepared : Prepared) (site : Site) (function : MIR.Operand) : Res
   return found.callee
 
 def abiOfInstance (prepared : Prepared) (fnInstance : CallInstance) (extraArgs : Array TypeId) : Result (FnAbi TypeId) :=
-  SourceAbiRuntime.ofInstance ⟨prepared.runtime, prepared.program, none⟩ fnInstance extraArgs
+  SourceAbiRuntime.ofInstance prepared.runtime fnInstance extraArgs
 
 /-- A loaded body carries the exact source table key. Equal MIR syntax does
 not make distinct root/template/promoted/instance body identities interchangeable. -/

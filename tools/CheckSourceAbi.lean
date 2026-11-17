@@ -83,7 +83,7 @@ def main (args : List String) : IO UInt32 := do
   let mut errors := 0
   let mut higherRanked := 0
   for row in oracle.instances do
-    let actual := SourceAbiRuntime.ofInstance context row.key row.extra
+    let actual := SourceAbiRuntime.ofInstance context.runtime row.key row.extra
     let expected := OracleAbi.functionAbi runtime oracle.layouts row.abi
     match actual, expected with
     | .ok actual, .ok expected =>
@@ -104,7 +104,7 @@ def main (args : List String) : IO UInt32 := do
     let actual := do
       let node ← runtime.node row.key |>.mapError toString
       let .functionPointer signature _ := node.shape | throw "oracle pointer type is not FnPtr"
-      SourceAbiRuntime.ofSignature context signature row.extra
+      SourceAbiRuntime.ofSignature context.runtime signature row.extra
     let expected := OracleAbi.functionAbi runtime oracle.layouts row.abi
     match actual, expected with
     | .ok actual, .ok expected =>

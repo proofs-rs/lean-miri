@@ -30,7 +30,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
 def expectedAbi (prepared : Prepared) (name : String) : Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.entries.find? (·.name == name)
     | throw s!"missing exact named compiler shim ABI query {name}"
-  SourceAbiRuntime.ofSignature ⟨prepared.runtime, prepared.program, none⟩ entry.source
+  SourceAbiRuntime.ofSignature prepared.runtime entry.source
 
 def query (prepared : Prepared) (name : String) : EStateM StepError S (FnAbi MIR.TyId) :=
   match expectedAbi prepared name with

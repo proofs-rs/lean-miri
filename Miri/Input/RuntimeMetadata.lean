@@ -228,11 +228,24 @@ def importTarget (source : TargetDataLayoutEvidence) : Result RuntimeTargetDataL
 
 end RuntimeMetadata
 
+private def calculateLayout (source : ImportDocument) (target : RuntimeTargetDataLayout)
+    (id : TypeId) : RuntimeMetadata.Result (TyAndLayout TypeId) := do
+  let node ← RuntimeMetadata.require source.types[id]? s!"type {id}"
+  unless node.id == id do throw (.invalid "compiler type ID" "row/index mismatch")
+  let normalized := node.sourceLayout.normalizedType
+  let value ← ConcreteTypeLayout.calculate source target normalized
+    |>.mapError (fun message => .invalid s!"concrete layout for type {id}" message)
+  return ⟨normalized, value⟩
+
 /-- Immutable compiler tables and target semantics. ID lookup directly indexes
 validated dense tables; semantic layouts are constructed only on demand. -/
 structure RuntimeMetadata where
   source : ImportDocument
   target : RuntimeTargetDataLayout
+  private layoutQuery : TypeId → RuntimeMetadata.Result (TyAndLayout TypeId) :=
+    calculateLayout source target
+  private layoutQuery_eq : ∀ id, layoutQuery id = calculateLayout source target id := by
+    intro id; rfl
 
 namespace RuntimeMetadata
 
@@ -252,12 +265,24 @@ def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode := do
   unless value.id == id do throw (.invalid "compiler type ID" "row/index mismatch")
   pure value
 
-def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) := do
-  let node ← metadata.node id
-  let normalized := node.sourceLayout.normalizedType
-  let value ← ConcreteTypeLayout.calculate metadata.source metadata.target normalized
-    |>.mapError (fun message => .invalid s!"concrete layout for type {id}" message)
-  return ⟨normalized,value⟩
+def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) :=
+  metadata.layoutQuery id
+
+/-- A fresh table belongs to one invocation, even when validated materials are reused. -/
+@[noinline] def startSession (metadata : RuntimeMetadata) : RuntimeMetadata :=
+  let slots := Array.ofFn fun (id : Fin metadata.source.types.size) =>
+    Thunk.mk fun _ => calculateLayout metadata.source metadata.target id.val
+  { source := metadata.source, target := metadata.target
+    layoutQuery := fun id =>
+      if h : id < metadata.source.types.size then (slots[id]'(by simpa [slots] using h)).get
+      else calculateLayout metadata.source metadata.target id
+    layoutQuery_eq := by
+      intro id
+      split <;> simp_all [slots, Thunk.get] }
+
+theorem startSession_lookup (metadata : RuntimeMetadata) (id : TypeId) :
+    metadata.startSession.lookup id = metadata.lookup id := by
+  exact (metadata.startSession.layoutQuery_eq id).trans (metadata.layoutQuery_eq id).symm
 
 /-- This is an explicit diagnostic inventory, not an execution-readiness test. -/
 def obligations (metadata : RuntimeMetadata) : Array (TypeId × RuntimeMetadataError) :=

@@ -136,6 +136,34 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
 def prepare (input : LoweredProgram) : Except String Prepared :=
   prepareProfiled {} input
 
+/-- Reuse validated tables while giving each invocation its own demanded query values. -/
+def Prepared.startSession (p : Prepared) : Prepared :=
+  let runtime := p.runtime.startSession
+  let facts := {p.lifecycle.calls.symbols.facts with
+    context := {p.lifecycle.calls.symbols.facts.context with runtime}}
+  let calls := {p.lifecycle.calls with
+    calls := {p.lifecycle.calls.calls with runtime}
+    symbols := {p.lifecycle.calls.symbols with facts}}
+  let lifecycle := {p.lifecycle with
+    calls
+    instances := CompilerInstanceAbi.startSession p.lifecycle.instances runtime
+    frames := {p.lifecycle.frames with calls}
+    shim := {p.lifecycle.shim with runtime}}
+  {p with
+    runtime := runtime
+    lifecycle := lifecycle
+    functions := {p.functions with runtime}
+    main := {p.main with runtime}
+    namedConstants := {p.namedConstants with runtime}
+    namedGlobals := {p.namedGlobals with runtime}
+    externStatics := {p.externStatics with runtime}
+    pointers := {p.pointers with calls}
+    vtables := {p.vtables with
+      calls := calls
+      queries := {p.vtables.queries with facts}}
+    namedAbi := {p.namedAbi with runtime}
+    initialArrays := p.initialArrays.map fun arrays => {arrays with metadata := runtime}}
+
 /-- The canonical predicate table belonging to all prepared vtable/cast facts. -/
 
 private def lift (query : Except String A) : MachineHooks.M K User A :=

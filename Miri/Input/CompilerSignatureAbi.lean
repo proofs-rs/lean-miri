@@ -11,7 +11,7 @@ def query (p : CompilerProviders.Prepared) (request : FunctionCalls.SignatureReq
   let signature : FunctionSignature := {
     inputs := request.inputs, output := request.output, safety := request.safety
     abi := request.abi, cVariadic := request.cVariadic }
-  SourceAbiRuntime.ofSignature context signature
+  SourceAbiRuntime.ofSignature context.runtime signature
 
 def hook (p : CompilerProviders.Prepared) (_ : C) (request : FunctionCalls.SignatureRequest ABI.ExternAbi) :
     EStateM StepError S (FnAbi MIR.TyId) :=

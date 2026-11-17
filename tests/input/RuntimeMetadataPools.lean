@@ -23,9 +23,9 @@ def main (args : List String) : IO Unit := do
   let some first := runtime.source.types[0]? | throw (IO.userError "empty type pool")
   let invalidTypes := runtime.source.types.set! 0 { first with sourceLayout :=
     {first.sourceLayout with normalizedType := runtime.source.types.size} }
-  let invalid := { runtime with source := { runtime.source with types := invalidTypes } }
+  let invalid : RuntimeMetadata := { source := { runtime.source with types := invalidTypes }, target := runtime.target }
   check (!(invalid.lookup 0).isOk) "out of bounds normalization accepted"
   let wrongTypes := runtime.source.types.set! 0 { first with id := 99 }
-  let wrongIdentity := { runtime with source := { runtime.source with types := wrongTypes } }
+  let wrongIdentity : RuntimeMetadata := { source := { runtime.source with types := wrongTypes }, target := runtime.target }
   check (!(wrongIdentity.node 0).isOk) "type row/index mismatch accepted"
   IO.println s!"runtime typed declarations: {runtime.source.types.size} references and checked bounds passed"

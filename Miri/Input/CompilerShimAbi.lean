@@ -47,7 +47,7 @@ def expectedAbi (prepared : Prepared) (signature : ForeignItems.Signature) :
     Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.entries.find? (·.signature == signature)
     | throw "missing exact compiler shim signature query"
-  SourceAbiRuntime.ofSignature ⟨prepared.runtime, prepared.program, none⟩ entry.source
+  SourceAbiRuntime.ofSignature prepared.runtime entry.source
 /-- Bind the compiler query provider to the shared source shim dispatcher. -/
 def hooks {P S D MD Ptr B I : Type} (prepared : Prepared) (base : ForeignItems.Hooks P S D MD Ptr B I) :
     ForeignItems.Hooks P S D MD Ptr B I :=

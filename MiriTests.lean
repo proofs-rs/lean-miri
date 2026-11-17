@@ -28,6 +28,7 @@ import MiriTests.Input.DecoderProfile2026
 import MiriTests.Input.DefinitionLookup2026
 import MiriTests.Input.FinalizationProfileIdentity2026
 import MiriTests.Input.PreparationProfile2026
+import MiriTests.Input.QueryMemoRefinement
 import MiriTests.Input.RuntimeStartupProfileIdentity2026
 import MiriTests.Projection.Projection
 import MiriTests.Regression.PointerPlaceKernel

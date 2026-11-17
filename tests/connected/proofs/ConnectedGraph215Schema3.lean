@@ -639,17 +639,20 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
         let world := afterCallbacks.machine.user.user.payload.payload
         let source := world.types.metadata.source
         let withSource := fun (changedSource : Input.ImportDocument) =>
-          let changedMetadata := {world.types.metadata with source := changedSource}
+          let changedMetadata : Input.RuntimeMetadata := {source := changedSource, target := world.types.metadata.target}
           let changedTypes := {world.types with metadata := changedMetadata}
           let changedWorld := {world with types := changedTypes}
           let changedValidity := {afterCallbacks.machine.user.user with
             payload := {afterCallbacks.machine.user.user.payload with payload := changedWorld}}
           let changedStorage := {afterCallbacks.machine.user with user := changedValidity}
           {afterCallbacks with machine := {afterCallbacks.machine with user := changedStorage}}
-        let some firstLayout := source.layouts[0]?
-          | throw "fixture unexpectedly has no compiler layouts"
+        let some declaration := source.types.find? (fun node => match node.shape with
+            | .adt _ => true | _ => false)
+          | throw "fixture unexpectedly has no ADT declarations"
+        let changedDeclaration := {declaration with sourceLayout :=
+          {declaration.sourceLayout with hasDestructor := !declaration.sourceLayout.hasDestructor}}
         let changedLayoutsState := withSource
-          {source with layouts := source.layouts.push firstLayout}
+          {source with types := source.types.set! declaration.id changedDeclaration}
         let changedLayoutsEq := decide (afterCallbacks = changedLayoutsState)
         let changedSettingsState := withSource {source with producerSettings :=
           {source.producerSettings with qualification := source.producerSettings.qualification ++ ".changed"}}

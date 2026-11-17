@@ -65,7 +65,31 @@ local instance : DecidableEq SourceTraitPattern := SourceTraitPatternEquality.pa
 deriving instance DecidableEq for SourceTraitType
 deriving instance DecidableEq for SourceTraitMaterial
 deriving instance DecidableEq for ImportDocument
-deriving instance DecidableEq for RuntimeMetadata
+private theorem runtimeMetadata_eq (left right : RuntimeMetadata)
+    (source : left.source = right.source) (target : left.target = right.target) :
+    left = right := by
+  cases left with
+  | mk leftSource leftTarget leftQuery leftQuery_eq =>
+    cases right with
+    | mk rightSource rightTarget rightQuery rightQuery_eq =>
+      cases source
+      cases target
+      have queries : leftQuery = rightQuery :=
+        funext fun id => (leftQuery_eq id).trans (rightQuery_eq id).symm
+      cases queries
+      rfl
+
+def runtimeMetadataDecidableEq (documentEq : DecidableEq ImportDocument) :
+    DecidableEq RuntimeMetadata := by
+  letI := documentEq
+  exact fun left right =>
+  if source : left.source = right.source then
+    if target : left.target = right.target then
+      isTrue (runtimeMetadata_eq left right source target)
+    else isFalse fun equal => target (congrArg RuntimeMetadata.target equal)
+  else isFalse fun equal => source (congrArg RuntimeMetadata.source equal)
+instance : DecidableEq RuntimeMetadata := runtimeMetadataDecidableEq inferInstance
+
 deriving instance DecidableEq for RuntimeArrayTypes.Entry
 deriving instance DecidableEq for RuntimeArrayTypes.World
 

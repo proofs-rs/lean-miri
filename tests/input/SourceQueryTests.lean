@@ -40,7 +40,7 @@ def main (args : List String) : IO Unit := do
   types := types.push {
     id := unsafeFunction, display := "unsafe function control"
     shape := .functionPointer {signature with safety := .Unsafe} #[.Region .Anon]}
-  let controls := {runtime with source := {document with types}}
+  let controls : RuntimeMetadata := {source := {document with types}, target := runtime.target}
   check ((← must (ConcreteCovariance.relation controls erased static)))
     "region-ignoring relation rejected shared references"
   check (!(← must (ConcreteCovariance.relation controls erased mutable)))
