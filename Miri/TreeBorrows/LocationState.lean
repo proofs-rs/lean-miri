@@ -156,6 +156,72 @@ theorem performAccess_child_forbidden_unchanged (state : LocationState)
       .Error state (.ChildAccessForbidden state.permission) := by
   simp [performAccess, h]
 
+/-- A foreign access to an unprotected Disabled node changes neither its
+permission, accessed bit nor SIFA. The wildcard postorder visitor uses this
+fact only after retaining the effects of all children. -/
+theorem performAccess_foreign_disabled_unprotected (accessed : Bool)
+    (sifa : IdempotentForeignAccess) (kind : AccessKind) :
+    performAccess ⟨.Disabled, accessed, sifa⟩ kind .ForeignAccess false =
+      .Success ⟨.Disabled, accessed, sifa⟩ ⟨.Disabled, .Disabled⟩ := by
+  cases kind <;> cases accessed <;> rfl
+
+/-- A foreign access to an unprotected Cell has no permission/accessed/SIFA
+transition. This does not authorize omitting recordNewAccess when its skip
+predicate says Recurse. -/
+theorem performAccess_foreign_cell_unprotected (accessed : Bool)
+    (sifa : IdempotentForeignAccess) (kind : AccessKind) :
+    performAccess ⟨.Cell, accessed, sifa⟩ kind .ForeignAccess false =
+      .Success ⟨.Cell, accessed, sifa⟩ ⟨.Cell, .Cell⟩ := by
+  cases kind <;> cases accessed <;> rfl
+
+/-- The restricted postorder repair only omits transitions that are no-ops.
+The caller separately requires exact Foreign relatedness and no protector. -/
+theorem foreign_disabled_or_cell_noop (state : LocationState) (kind : AccessKind)
+    (permission : state.permission = .Disabled ∨ state.permission = .Cell) :
+    performAccess state kind .ForeignAccess false =
+      .Success state ⟨state.permission,state.permission⟩ := by
+  cases state with
+  | mk p accessed sifa =>
+    rcases permission with rfl | rfl
+    · exact performAccess_foreign_disabled_unprotected accessed sifa kind
+    · exact performAccess_foreign_cell_unprotected accessed sifa kind
+
+/-- The complete foreign-Write same-state normal-return class for all
+protection/accessed combinations. It preserves the whole state for foreign Read. Protection is
+retained: an accessed Disabled node and every ReservedIM node reject a held
+protector. This Boolean contains no operation-success premise. -/
+def foreignWriteNoop (state : LocationState) (isProtected : Bool) : Bool :=
+  state.permission == .Cell ||
+    (state.permission.isDisabled && (!isProtected || !state.accessed)) ||
+    (state.permission == .ReservedIM && !isProtected)
+
+theorem foreignWriteNoop_iff (state : LocationState) (isProtected : Bool) :
+    state.foreignWriteNoop isProtected = true ↔
+      state.permission = .Cell ∨
+      (state.permission = .Disabled ∧ (isProtected = false ∨ state.accessed = false)) ∨
+      (state.permission = .ReservedIM ∧ isProtected = false) := by
+  rcases state with ⟨permission,accessed,sifa⟩
+  cases permission <;> cases accessed <;> cases isProtected <;>
+    simp [foreignWriteNoop,Permission.isDisabled]
+
+/-- Every field, including SIFA, is unchanged for either access kind. -/
+theorem performAccess_foreignWriteNoop (state : LocationState) (kind : AccessKind)
+    (isProtected : Bool) (eligible : state.foreignWriteNoop isProtected = true) :
+    state.performAccess kind .ForeignAccess isProtected =
+      .Success state ⟨state.permission,state.permission⟩ := by
+  rcases state with ⟨permission,accessed,sifa⟩
+  cases permission <;> cases accessed <;> cases isProtected <;> cases kind <;>
+    simp_all [foreignWriteNoop,Permission.isDisabled]
+  all_goals rfl
+
+/-- The postorder skip condition only replaces an old assertion branch;
+it does not bypass an old successful SIFA update. -/
+theorem recordNewAccess_debug_of_skip (state : LocationState) (kind : AccessKind)
+    (relatedness : AccessRelatedness)
+    (skip : state.skipIfKnownNoop kind relatedness = .SkipSelfAndChildren) :
+    state.recordNewAccess kind relatedness = .DebugAssertion := by
+  simp [recordNewAccess,skip]
+
 end LocationState
 
 end Tree

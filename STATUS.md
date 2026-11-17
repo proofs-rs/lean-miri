@@ -6,7 +6,86 @@ See the [development guide](docs/development.md#check-commands) and
 [test guide](tests/README.md) for check entry points, prerequisites and coverage.
 Historical successes do not establish successful execution in the current checkout.
 
-The acceptance scope includes common MIR, memory/Tree Borrows, Rust main startup
+## Completed duplicate_prefix ordinary-input goal
+
+`CurrentCallOrdinarySafety.invoke` takes the explicit `OrdinaryInput` domain
+and any UInt64 count and proves `DuplicatePrefixArgumentCallResult.Result`:
+actual call initialization, normal physical return, no interpreter errors,
+finite-prefix UB freedom and reachable-step progress. Empty and positive
+inputs, source/return representations, LIVE/CURRENT backings and shared or
+distinct allocation IDs are included. Resource, configuration, compiler metadata
+and typed choice-input premises remain explicit. Arbitrary Rust caller-history
+formation, Rust/interpreter correspondence and additional Bool-value guarantees
+are outside this theorem.
+
+`CurrentCallOrdinaryWitnessSafety` constructs a positive CURRENT/CURRENT
+example with source [0,2), Bool destination [2,3), bytes [11,22,0], length 2
+and count 1. Its span and JSON-comparator contracts remain assumptions; the
+synthetic allocation registry does not certify a Rust calling history.
+
+The included interpreter changes wildcard postorder handling. The proof targets
+that explicit implementation, whose sources are bound by
+`examples/duplicate_prefix/LIBRARY-SHA256SUMS`. This is not a proof about an
+unmodified upstream interpreter. Compiler/exporter correctness remains trusted.
+
+See [the example guide](examples/duplicate_prefix/README.md) for the precise
+premises and reproduction commands.
+
+### Latest-main integration and validation
+
+The PR branch includes main `c8daa215`. Both fixed inputs were regenerated
+with the pinned schema-12 exporter without changing their Rust sources. The
+library source manifest and checker pin bind the merged library. The proof port
+uses typed import documents, separate instance/definition/body identities,
+direct constant evaluation, current ABI/span queries and FnEntry
+instance-definition lookups. Extras lemmas preserve arbitrary diagnostic
+backtraces independently of weak-memory and synchronization conditions. The
+public ordinary-input and result requirements are unchanged.
+
+The example retains the dependency closures of the public safety/witness,
+independent contract results and component/regression roots. Unreferenced legacy
+proof namespaces and unused copy-client postcondition wrappers are removed;
+their remaining dependencies are imported directly. The two scoped-copy ownership
+families derive actual Read/Write completion internally and share one six-module
+MIR execution/return proof. No completion or safety certificate is added to
+`OrdinaryInput`. Every remaining example module is reachable from `Check`.
+Both checkers run the shared `tools/duplicate-prefix-axiom-audit.lean` once after
+compiling their selected roots; the audit body and approved axioms are unchanged.
+
+On 2026-11-16 (Asia/Tokyo), the complete frozen `Check` closure passed: 2,919
+modules, including 451 exact source/dependency/artifact-bound reuses from a
+successful independent check. The transitive audit checked 146,409 imported
+theorems and 46,496 owned declarations, including private/generated declarations,
+accepting only `propext`, `Quot.sound` and `Classical.choice`. Fixed Rust/MIR
+hashes, library sources, compiler artifacts and snapshot/current-source bindings
+were verified before the successful manifest was written. The shared audit
+source is also bound by the successful manifest.
+
+Eight public declarations were compared as Lean expressions against the preceding
+revision: the four top-level safety theorem types, `OrdinaryInput`'s constructor
+type, both public Result definitions and the nonemptiness witness type. All are
+identical. The default sequential 2,919-module compilation was not rerun.
+
+`tools/check-quick.sh` passes all 135 Python tests, source lint, fixed-fixture
+integrity and coverage-link checks. `WildcardPostorderDisabled.lean` and
+`CutoffBorrowTraceDiagnostic.lean` compiled successfully during the main
+integration; they were not rerun for this proof-only cleanup. The full
+`tools/check.sh` suite, Tree Borrows component differential suite and independent
+Miri derivative QA were not rerun. These checks do not establish Rust
+caller-domain formation or Rust/interpreter correspondence.
+
+## Self-contained Lean test entry points
+
+Self-contained Lean checks are collected under `MiriTests/` and registered with
+Lake. `lake build MiriTests` checks all its modules; `lake exe miri_tests` reruns
+registered runtime assertions even with cached builds. External comparisons and
+input-dependent harnesses remain under `tests/`. This registration does not add
+whole-machine proofs or turn historical results below into current reruns. See
+[the test guide](tests/README.md#self-contained-lean-checks-miritests).
+
+## Acceptance scope and current position
+
+The scope includes common MIR, memory/Tree Borrows, Rust main startup
 and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.

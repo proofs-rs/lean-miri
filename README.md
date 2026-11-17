@@ -106,6 +106,20 @@ Repeated `--root` options select multiple functions. A selected generic function
 contributes a declaration; only discovered concrete instances have executable
 MIR. Schema 14 requires fresh exports from earlier input formats.
 
+### Prove a complete function call
+
+The [duplicate-prefix example](examples/duplicate_prefix/README.md) states a
+complete-call safety theorem for an explicit caller-state domain, including
+normal return and finite-prefix UB freedom. Check the final theorem and its
+positive witness with:
+
+```bash
+python3 tools/check-duplicate-prefix-dag.py CurrentCallOrdinaryWitnessSafety
+```
+
+The example guide lists the required configuration, resource and compiler
+metadata premises, the Tree Borrows implementation change, and trust boundaries.
+
 ## Tests
 
 Run `lake build MiriTests` for self-contained Lean test modules, then
