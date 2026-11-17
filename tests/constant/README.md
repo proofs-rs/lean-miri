@@ -7,7 +7,9 @@ bash tests/constant/run.sh
 ```
 
 The script builds the pinned exporter and exports `exporter/fixtures/mir_features.rs`.
-The Lean tests use that compiler graph and target metadata to check allocation
+An explicitly rooted raw-pointer accessor supplies the compiler operand for the static
+allocation check; its original pointer flags remain asserted. The Lean tests use that
+compiler graph and target metadata to check allocation
 images, relocations, constant operands, lazy static initialization and supplied compiler query
 results. Negative cases cover malformed images, missing metadata, unknown
 evaluation queries, TLS/extern routing and failed-hook state retention.

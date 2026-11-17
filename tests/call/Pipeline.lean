@@ -26,6 +26,7 @@ structure State where
   frame : Frame Unit LocalLayout Unit := frame
   trace : List String := []
   index : Nat := 0
+  empty : Bool := false
   localsSupply : LocalsIdentitySupply := ⟨1⟩
 
 def log (name : String) (value : A) : CallM State A := do
@@ -41,6 +42,7 @@ def hooks : Hooks := {
   getFrame := return (← get).frame
   setFrame := fun f => modify fun s => { s with frame := f }
   frameIndex := return (← get).index
+  stackIsEmpty := return (← get).empty
   evalOperand := fun _ _ => log "operand" op
   evalPlace := fun _ _ skip => log s!"place:{skip}" runtimePlace
   placeToOp := fun _ _ => log "placeToOp" op
@@ -179,6 +181,23 @@ def main : IO Unit := do
     .Call (.Copy ⟨0, #[]⟩) #[⟨⟨0⟩, .Copy ⟨1, #[]⟩⟩] ⟨2, #[]⟩ (some 1) .Continue .Normal ⟨0⟩⟩
   let (state, result) := Call.run (Call.evalCallTerminator hooks () 4 term) {}
   check result.isOk "top-level Call"
+  let exitHooks := { hooks with
+    frameIndex := do
+      let state ← get
+      if state.empty then throw (.stack .emptyStack)
+      pure state.index
+    findMirOrEvalFn := fun _ _ _ _ _ _ _ => do
+      modify fun state => {state with empty := true}
+      pure none }
+  let (_, exitResult) := Call.run (Call.evalCallTerminator exitHooks () 4 term) {}
+  check exitResult.isOk "call that clears the stack must be accepted"
+  let stuckHooks := { hooks with findMirOrEvalFn := fun _ _ _ _ _ _ _ => pure none }
+  let (_, stuckResult) := Call.run (Call.evalCallTerminator stuckHooks () 4 term) {}
+  check (!stuckResult.isOk) "call with unchanged nonempty stack must fail"
+  let noReturn : Miri.MIR.Terminator := ⟨⟨⟨0⟩, 0⟩,
+    .Call (.Copy ⟨0, #[]⟩) #[⟨⟨0⟩, .Copy ⟨1, #[]⟩⟩] ⟨2, #[]⟩ none .Continue .Normal ⟨0⟩⟩
+  let (_, noReturnResult) := Call.run (Call.evalCallTerminator stuckHooks () 4 noReturn) {}
+  check (!noReturnResult.isOk) "non-returning call with unchanged stack must fail"
   check (state.trace.take 8 == ["place:false", "operand", "operand", "signature", "functionKind", "resolve", "fnAbi", "requiresLocation"]) "destination before callee and args"
   let (state, result) := Call.run (Call.initFnCall hooks () 0 request) {}
   check (!result.isOk && state.trace.isEmpty) "runner budget exhaustion"

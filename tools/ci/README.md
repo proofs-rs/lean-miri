@@ -136,8 +136,8 @@ failure status; one failed guest does not prevent later guests from running.
 The query-demand check exports the existing call-transfer and TLS fixtures before
 checking malformed native-signature and TLS fields at the decoder boundary,
 then exercising valid provider queries and ignored extension-field controls. Runtime type
-closure exports the existing nested-vtable fixture and checks LateOnly plus both
-reached virtual methods. The cross-crate control compiles its producer separately
+closure exports the nested-vtable fixture, calculates the LateOnly runtime layout,
+and resolves both reached virtual methods to their exact concrete vtable slots. The cross-crate control compiles its producer separately
 and requires the consumer's genuine external constant/vtable relocation.
 
 All six focused guests are freshly exported, checked against reference Miri,

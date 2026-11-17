@@ -13,6 +13,7 @@ def calls (h : CallHooks P (MachineHooks.State K (Inner U)) C E O X F A) :
   getFrame := action (h.getFrame)
   setFrame := fun a0 => action (h.setFrame a0)
   frameIndex := action (h.frameIndex)
+  stackIsEmpty := action h.stackIsEmpty
   evalOperand := fun a0 a1 => action (h.evalOperand a0 a1)
   evalPlace := fun a0 a1 a2 => action (h.evalPlace a0 a1 a2)
   placeToOp := fun a0 a1 => action (h.placeToOp a0 a1)

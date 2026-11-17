@@ -62,9 +62,8 @@ def main():
     # A source-level powi spelling alone is insufficient coverage evidence.
     snapshot = inspection_document(decode_mir_document(json.loads(raw)))
     records = snapshot['compiler_runtime_queries']['instances']
-    intrinsics = {record['instance_id']: record.get('item_name')
-                  for record in records
-                  if record.get('intrinsic_metadata') is not None}
+    intrinsics = {record['instance_id'] for record in records
+                  if record.get('intrinsic_metadata') is not None and record.get('item_name') == 'powi'}
     retained = set()
     for root in snapshot['body_roots']:
         if root.get('def_path') != 'miri_start':
@@ -72,15 +71,23 @@ def main():
         body = pool_entry(snapshot, 'bodies', root['body'])
         for block in body['basic_blocks']:
             call = block.get('terminator', {}).get('kind', {})
-            name = intrinsics.get(call.get('resolution', {}).get('instance_id'))
-            if name not in {'powif32', 'powif64'}:
+            instance_id = call.get('resolution', {}).get('instance_id')
+            if instance_id not in intrinsics:
                 continue
+            instance = pool_entry(snapshot, 'instances', instance_id)
+            generic, = instance['generic_args']
+            if generic['kind'] != 'type':
+                raise SystemExit('powi generic argument is not a type')
+            shape = pool_entry(snapshot, 'types', generic['value'])['shape']
+            if shape['kind'] != 'float' or shape['float_kind'] not in {'f32', 'f64'}:
+                raise SystemExit(f"unexpected powi generic type: {shape}")
+            name = shape['float_kind']
             base, power = [arg['operand'] for arg in call['args']]
-            if (base['kind'] not in {'Copy', 'Move'} or power['kind'] != 'Constant' or
+            if (base['kind'] not in {'Copy', 'Move'} or base['place']['type'] != generic['value'] or power['kind'] != 'Constant' or
                     power['constant']['constant']['value']['bits_unsigned'] != '0'):
                 raise SystemExit(f'{name} lost its runtime base or zero exponent')
             retained.add(name)
-    if retained != {'powif32', 'powif64'}:
+    if retained != {'f32', 'f64'}:
         raise SystemExit(f'fresh MIR lost powi intrinsic calls: {retained}')
     subprocess.run([str(elan / 'bin/lake'), 'env', 'lean', '--run',
                     'tests/connected/203-upcast-a-prefix.lean', str(output)],

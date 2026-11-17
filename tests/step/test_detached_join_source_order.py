@@ -37,9 +37,9 @@ def test_detached_join_fails_before_join_state_or_sync_effects() -> None:
     )
     source_checks = [
         "join_status == ThreadJoinStatus::Joined",
-        "joined_thread_id == this.machine.threads.active_thread",
+        "joined_thread_id == ecx.machine.threads.active_thread",
         "BlockReason::Join(joined_thread_id)",
-        "this.join_thread(joined_thread_id",
+        "ecx.join_thread(joined_thread_id",
     ]
     assert [source_exclusive.index(token) for token in source_checks] == sorted(
         source_exclusive.index(token) for token in source_checks
@@ -47,8 +47,9 @@ def test_detached_join_fails_before_join_state_or_sync_effects() -> None:
     detached = source_join.index("join_status == ThreadJoinStatus::Detached")
     marked = source_join.index("join_status = ThreadJoinStatus::Joined")
     sync = source_join.index("handle_thread_join(thread_mgr.active_thread")
-    assert detached < marked < sync
-    assert detached < source_join.index("after_join(this, joined_thread_id")
+    assert detached < marked
+    assert detached < sync
+    assert marked < source_join.rindex("after_join(ecx, joined_thread_id")
 
     lean_join = body_after(lean, "def joinExclusive ", "def takeJoin ")
     lean_checks = [

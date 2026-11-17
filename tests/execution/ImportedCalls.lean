@@ -438,6 +438,7 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit ABI.
   getFrame := current
   setFrame := putFrame
   frameIndex := do lift ((← get).stack.frameIndex.mapError StepError.stack)
+  stackIsEmpty := return (← get).stack.frames.isEmpty
   evalOperand := fun _ op => evalOperand p.metadata op none
   evalPlace := fun _ => runtimePlace p.metadata
   placeToOp := fun _ => placeToOp p.metadata

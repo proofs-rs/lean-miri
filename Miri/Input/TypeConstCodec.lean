@@ -23,6 +23,8 @@ private def valueTree (path : String) : Parser ValTree := do
     if v.elements.isSome then fail s!"{path}: leaf valtree carries branch elements"
     let size ← required v.size "size_bytes"
     let bitsText ← required v.bits "bits_unsigned"
+    unless !bitsText.isEmpty && bitsText.toList.all Char.isDigit do
+      fail s!"{path}: invalid valtree bits"
     let some bits := bitsText.toNat? | fail s!"{path}: invalid valtree bits"
     unless size > 0 && size ≤ 16 && bits < 2 ^ (size * 8) do fail s!"{path}: invalid valtree scalar width"
     return ⟨#[.Leaf bits size], 0⟩

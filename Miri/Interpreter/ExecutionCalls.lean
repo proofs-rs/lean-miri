@@ -69,6 +69,7 @@ def make [DecidableEq K] (leaves : ExecutionCallLeaves.Hooks (State K U) C Other
    setFrame := MachineHooks.setCurrentFrame
    frameIndex := do match (← get).stack.frameIndex with
       | .ok index => pure index | .error error => throw (.stack error)
+   stackIsEmpty := return (← get).stack.frames.isEmpty
    evalOperand := fun c operand => OperandMachine.evalOperand operands c operand none
    evalPlace := fun c dest skip => return (← PlaceDynamic.evalPlace projection c dest skip).stackView
    placeToOp := fun c dest => placeToOp place c dest.toRuntimePlace

@@ -9,7 +9,7 @@ class SchedulingPrefix(unittest.TestCase):
         locked=next(x for x in json.loads((ROOT/'upstream/source-lock.json').read_text())['files'] if x['path']==PATH)
         self.assertEqual(hashlib.sha256(raw).hexdigest(),locked['sha256'])
         source=raw.decode()
-        start=source.index('        DelayedReadinessUpdates::process(this)?;')
+        start=source.index('        DelayedCallbacks::process(ecx)?;')
         end=source.index('        let thread_manager =',start)
         prefix=source[start:end]
         harness=r'''
@@ -17,12 +17,12 @@ use std::time::Duration;
 struct Machine{communicate:bool}
 impl Machine{fn communicate(&self)->bool{self.communicate}}
 struct Cx{machine:Machine,events:Vec<u8>,fail:u8}
-struct DelayedReadinessUpdates;
-impl DelayedReadinessUpdates{fn process(cx:&mut Cx)->Result<(),String>{cx.events.push(1);cx.machine.communicate=true;if cx.fail==1{Err("readiness".into())}else{Ok(())}}}
+struct DelayedCallbacks;
+impl DelayedCallbacks{fn process(cx:&mut Cx)->Result<(),String>{cx.events.push(1);cx.machine.communicate=true;if cx.fail==1{Err("readiness".into())}else{Ok(())}}}
 impl Cx{
 fn poll_and_unblock(&mut self,d:Option<Duration>)->Result<(),String>{assert_eq!(d,Some(Duration::ZERO));self.events.push(2);if self.fail==2{Err("poll".into())}else{Ok(())}}
 fn unblock_expired_deadlines(&mut self)->Result<Option<Duration>,String>{self.events.push(3);if self.fail==3{Err("deadline".into())}else{Ok(Some(Duration::from_nanos(10)))}}
-fn prefix(&mut self)->Result<Option<Duration>,String>{let this=self;
+fn prefix(&mut self)->Result<Option<Duration>,String>{let ecx=self;
 PREFIX
 Ok(potential_sleep_time)
 }}

@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-RULES = json.loads((ROOT / "tests/connected/fixtures/selector-rules.json").read_text())
+RULES = json.loads((ROOT / "tests/connected/selector-current-sources.json").read_text())
 WEAK_PATH = "upstream/miri-source/src/concurrency/weak_memory.rs"
 RACE_PATH = "upstream/miri-source/src/concurrency/data_race.rs"
 PINS = {item["path"]: item["sha256"] for item in RULES["sources"]}
@@ -316,8 +316,12 @@ def lean_outcomes(sc: bool, lean_source: Path) -> list[tuple[int, int]]:
 
 
 def run_reference(source_directory: Path, binary_directory: Path, lean_source: Path) -> None:
+    for name in ("miri", "rustc"):
+        if RULES[f"{name}_commit"] != (ROOT / f"upstream/.pins/{name}.commit").read_text().strip():
+            raise SystemExit(f"selector source audit does not match pinned {name} commit")
     weak = require_pinned_source(WEAK_PATH)
     require_pinned_source(RACE_PATH)
+    require_pinned_source("upstream/miri-source/src/data_structures/range_object_map.rs")
     fetch_method = extract_fetch_store(weak)
     exe = build_rust_oracle(fetch_method, source_directory, binary_directory)
     for sc, label in ((True, "SeqCst"), (False, "Relaxed")):

@@ -1,0 +1,10 @@
+{
+  "miri_commit": "93c45edea8b148a6b6f05ec9384449a04217143f",
+  "rustc_commit": "8eb778d04094d3af4b26580cab327e0413eb1e02",
+  "audit": "Compared to the previous pinned Miri source: fetch_store, store_impl, load_impl, thread_created, clock synchronization and SC bookkeeping are unchanged; the data-race changes are identifier renames. Weak-memory buffer indexing now uses get_pos/get_mut_pos with the same position. The range map additionally rejects zero-sized inserts; atomic accesses in this projection are nonzero. The previous selector-rules.json remains historical evidence for its older source pin.",
+  "sources": [
+    {"path": "upstream/miri-source/src/concurrency/weak_memory.rs", "sha256": "363184a4a6b82a81ac0c2745a00512d27253fc7bf7fba6c350d05f643e1ac67c"},
+    {"path": "upstream/miri-source/src/concurrency/data_race.rs", "sha256": "11e1ec6a655a09169577b6f4e84e8b7fb05b5dd0d53a9ee8d0ea92ae3eba9b5c"},
+    {"path": "upstream/miri-source/src/data_structures/range_object_map.rs", "sha256": "54840f593d54b1daa8fbfdd803570e7f2c723c46ae4a12f9818923a6e5d3a60c"}
+  ]
+}

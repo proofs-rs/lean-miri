@@ -350,6 +350,16 @@ sys.exit(CODE)
         })
         self.assertFalse(driver.runner_profile_matches(case, source, observed))
 
+    def test_runner_rejects_wrong_float_rounding_mode(self):
+        case = Case('pass/test.rs')
+        source = driver.SOURCES / case.path
+        observed = runtime_profile([]) | {'argv0': str(source),
+                                         'choice_policy': 'seeded-generated-0',
+                                         'float_rounding_error_mode': 'None'}
+        self.assertEqual(driver.runner_profile_differences(case, source, observed), {
+            'float_rounding_error_mode': {'expected': 'Random', 'actual': 'None', 'missing': False}})
+        self.assertFalse(driver.runner_profile_matches(case, source, observed))
+
     def test_missing_allocation_backtrace_collection_is_not_claimed_as_enabled(self):
         case = Case('pass/test.rs')
         source = driver.SOURCES / case.path

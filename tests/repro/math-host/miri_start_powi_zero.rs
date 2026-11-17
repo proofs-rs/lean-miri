@@ -23,7 +23,7 @@ pub fn miri_start(argc: isize, _argv: *const *const u8) -> isize {
         f32::from_bits(0xffc0_0000 | payload),
     ];
     for base in bases32 {
-        if core::intrinsics::powif32(base, 0).to_bits() != 0x3f80_0000 {
+        if core::intrinsics::powi(base, 0).to_bits() != 0x3f80_0000 {
             return 32;
         }
     }
@@ -39,7 +39,7 @@ pub fn miri_start(argc: isize, _argv: *const *const u8) -> isize {
         f64::from_bits(0xfff8_0000_0000_0000 | payload),
     ];
     for base in bases64 {
-        if core::intrinsics::powif64(base, 0).to_bits() != 0x3ff0_0000_0000_0000 {
+        if core::intrinsics::powi(base, 0).to_bits() != 0x3ff0_0000_0000_0000 {
             return 64;
         }
     }

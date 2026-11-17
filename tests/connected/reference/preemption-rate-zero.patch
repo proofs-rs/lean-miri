@@ -1,6 +1,6 @@
 --- a/exporter/src/main.rs
 +++ b/scratch/reference-profile-exporter/src/main.rs
-@@ -662,7 +662,34 @@
+@@ -627,7 +627,34 @@
  }
  
  #[cfg(feature = "miri-reference")]
@@ -35,10 +35,10 @@
      match env::var("LEAN_MIRI_REFERENCE_ARGS_JSON") {
          Ok(value) => serde_json::from_str::<Vec<String>>(&value)
              .map_err(|error| format!("invalid LEAN_MIRI_REFERENCE_ARGS_JSON: {error}")),
-@@ -679,7 +706,10 @@
+@@ -644,7 +671,10 @@
      extra_args: &[String],
  ) -> reference_values::Result {
-     use reference_values::{Config, TreeBorrows, Result as R, Status as S, Outcome as O};
+     use reference_values::{Config, Outcome as O, Result as R, Status as S, TreeBorrows};
 +    let (seed, rate, argv0) = prepared_miri_reference_profile().expect("reference profile validated before execution");
      let mut config = miri::MiriConfig::default();
 +    config.seed = seed;
@@ -46,9 +46,9 @@
      config.borrow_tracker = Some(miri::BorrowTrackerMethod::TreeBorrows(
          miri::TreeBorrowsParams {
              precise_interior_mut: true,
-@@ -688,7 +718,7 @@
-     ));
-     config.env = env::vars_os().collect();
+@@ -662,7 +692,7 @@
+         }
+     };
      let file_name = tcx.sess.io.input.file_name(tcx.sess);
 -    let mut args = vec![file_name.prefer_local_unconditionally().to_string()];
 +    let mut args = vec![argv0.unwrap_or_else(|| file_name.prefer_local_unconditionally().to_string())];

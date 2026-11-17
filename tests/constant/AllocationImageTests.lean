@@ -66,7 +66,7 @@ def main (args : List String) : IO Unit := do
     | _ => pure ()
   let some static := decoded.document.allocations.find? (fun node => match node.data with
     | some (.static value) => value.definitionPath == "STATIC_DATA" | _ => false)
-    | throw (IO.userError "missing actual STATIC_REF allocation")
+    | throw (IO.userError "missing actual STATIC_DATA allocation")
   let id ← must (AllocationImage.runtimeId imported.memory static.id)
   let first := MemoryLifecycle.getAllocRaw imported.memory #[] id (some ()) (globals image)
   let _ ← must (first.outcome.mapError (fun e => reprStr e))
@@ -74,7 +74,7 @@ def main (args : List String) : IO Unit := do
   let second := MemoryLifecycle.getAllocRaw first.memory first.hooks id (some ()) (globals image)
   let _ ← must (second.outcome.mapError (fun e => reprStr e))
   check (second.hooks == first.hooks) "cached owned global repeated initializer/hooks"
-  let some primitive := decoded.document.types.find? (fun ty => ty.shapeKind == .uint && ((decoded.document.layouts[ty.layoutId]?).bind (·.sizeBytes)) == some 4)
+  let some primitive := decoded.document.types.find? (fun ty => match ty.shape with | .uint (.known .u32) => true | _ => false)
     | throw (IO.userError "fixture lacks u32 layout")
   let state : ConstantState CtfeProvenance Unit Unit (Array String) :=
     ⟨imported.memory, #[]⟩
@@ -87,10 +87,10 @@ def main (args : List String) : IO Unit := do
       let some provenance := place.ptr.provenance | throw (IO.userError "indirect constant lost provenance")
       check (provenance.allocId == id && provenance.immutable && provenance.sharedRef) "indirect constant lost immutable CTFE root"
     | _ => throw (IO.userError "indirect constant became immediate")
-  let some staticRefRoot := program.input.bodyRoots.find? (fun body => body.defPath == "STATIC_REF")
-    | throw (IO.userError "missing actual STATIC_REF root")
+  let some staticRefRoot := program.input.bodyRoots.find? (fun body => body.defPath == "get_static_ptr")
+    | throw (IO.userError "missing actual get_static_ptr root")
   let some staticRefBody := program.bundle.bodies[staticRefRoot.bodyId]?
-    | throw (IO.userError "missing actual STATIC_REF body")
+    | throw (IO.userError "missing actual get_static_ptr body")
   let actualConstant := staticRefBody.body.basicBlocks.foldl (fun found block =>
     block.statements.foldl (fun found statement => match found, statement.kind with
       | some value, _ => some value

@@ -13,7 +13,11 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/exporter/target}"
 flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.Decoder Miri.Interpreter.Constant
 FIXTURE="$(mktemp "${TMPDIR:-/tmp}/lean-miri-constant-XXXXXX.json")"
 trap 'rm -f "$FIXTURE"' EXIT
-"$CARGO_TARGET_DIR/release/lean-miri-mir-exporter" --output "$FIXTURE" exporter/fixtures/mir_features.rs --crate-type=lib --crate-name=mir_features
+"$CARGO_TARGET_DIR/release/lean-miri-mir-exporter" --output "$FIXTURE" \
+  --root direct_tag_value --root get_vtable_root --root as_trait_object \
+  --root as_drop_trait_object --root call_trait_object --root make_link --root promoted_ref \
+  --root byte_string --root pointer_slice --root get_static_ptr --root read_tls --root id --root array_len --root exercise \
+  exporter/fixtures/mir_features.rs --crate-type=lib --crate-name=mir_features
 lake env lean --run tests/constant/AllocationImageTests.lean "$FIXTURE"
 lake env lean --run tests/constant/ImageInvariantTests.lean "$FIXTURE"
 lake env lean --run tests/constant/RootPointerTests.lean "$FIXTURE"

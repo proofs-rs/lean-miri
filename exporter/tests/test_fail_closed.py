@@ -259,6 +259,14 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertTrue(boxes)
         self.assertTrue(all(node["shape"]["kind"] == "adt" and node["shape"]["generic_args"]
                             for node in boxes))
+        for node in boxes:
+            normalized = document["types"][node["source_layout"]["normalized_type"]]
+            pointee = normalized["shape"]["generic_args"][0]["value"]
+            pointers = [candidate for candidate in document["types"]
+                        if candidate["shape"].get("kind") == "raw_pointer"
+                        and candidate["shape"].get("mutability", {}).get("kind") == "mutable"
+                        and candidate["shape"].get("pointee") == pointee]
+            self.assertEqual(len(pointers), 1, f"missing or ambiguous Box pointer for {node['display']}")
 
     def test_result_main_has_exact_bootstrap_source_signature(self):
         document = self.accepted("start_result", "main", "bin")

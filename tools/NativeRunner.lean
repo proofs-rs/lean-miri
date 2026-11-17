@@ -109,6 +109,7 @@ private structure UiSettings where
   fixedScheduling : Bool := false
   deterministicConcurrency : Bool := false
   ignoreLeaks : Bool := false
+  mathError : Math.ErrorMode := .random
 
 private def uiSettings (source flags : String) : Except String UiSettings := do
   let values ← (← Json.parse flags).getArr?
@@ -160,6 +161,7 @@ private def uiProfile (ui : UiSettings) : Json := Json.mkObj [
   ("collect_leak_backtraces", toJson (uiOptions ui).collectLeakBacktraces),
   ("genmc", toJson false), ("native_libraries", toJson (0 : Nat)),
   ("short_fd_operations", toJson true), ("float_nondeterminism", toJson true),
+  ("float_rounding_error_mode", toJson (match ui.mathError with | .none => "None" | .random => "Random" | .max => "Max")),
   ("cmpxchg_weak_failure_rate", toJson (if ui.deterministicConcurrency then (0.0 : _root_.Float) else 0.8)),
   ("address_reuse_cross_thread_rate", toJson (if ui.deterministicConcurrency then (0.0 : _root_.Float) else 0.1))]
 
@@ -483,8 +485,10 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       arch == "x86_64" && targetBits == 64 do
     throw s!"fixture requires x86_64-unknown-linux-gnu; got triple={compiler.program.input.producer.targetTriple}, arch={arch}, bits={targetBits}"
   let geometry ← (Input.InitialMachine.geometry targetBits arch false none).mapError reprStr
-  let leavesFor := fun stdio => sourceLeaves dummy geometry pageSize numCpus hostPid ui.isSome
-    ((ui.map (·.alignment)).getD .Int) stdio
+  let leavesFor := fun stdio =>
+    let leaves := sourceLeaves dummy geometry pageSize numCpus hostPid ui.isSome
+      ((ui.map (·.alignment)).getD .Int) stdio
+    { leaves with mathError := (ui.map (·.mathError)).getD .none }
   let sourceLeaves := leavesFor none
   let machineConfig : Input.InitialMachine.Configuration Aff B := {
     geometry, dummySpan := dummy, provenance := (ui.map (·.provenance)).getD .default, addressMode := .managed

@@ -37,7 +37,7 @@ def runtime_profile(flags):
         'alignment_check': 'Int', 'provenance_mode': 'Default',
         'data_race_detector': True, 'weak_memory_emulation': True,
         'ignore_leaks': False, 'genmc': False, 'native_libraries': 0,
-        'short_fd_operations': True, 'float_nondeterminism': True,
+        'short_fd_operations': True, 'float_nondeterminism': True, 'float_rounding_error_mode': 'Random',
         'cmpxchg_weak_failure_rate': 0.8, 'fixed_scheduling': False,
         'address_reuse_cross_thread_rate': 0.1, 'collect_leak_backtraces': True,
     }

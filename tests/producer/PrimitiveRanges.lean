@@ -10,35 +10,20 @@ private def replace (j : Json) (key : String) (value : Json) : Except String Jso
   match j with
   | .obj fields => .ok (Json.mkObj ((key, value) :: fields.toList.filter (·.1 != key)))
   | _ => .error "expected object"
--- Schema 10 keeps logical layout IDs in `layouts` and shares their payloads.
--- Mutate the payload referenced by the exact logical layout, not its ID slot.
-private def layoutPayload (root : Json) (layoutId : Nat) : Except String (Array Json × Nat × Json) := do
-  let layouts ← (← field root "layouts").getArr?
-  let some reference := layouts[layoutId]? | throw "physical layout reference missing"
-  let payloadId ← reference.getNat?
-  let payloads ← (← field root "layout_values").getArr?
-  let some payload := payloads[payloadId]? | throw "physical layout payload missing"
-  pure (payloads, payloadId, payload)
-private def changeEnd (root : Json) (id : Nat) (last : Json) : Except String Json := do
-  let types ← (← field root "types").getArr?
-  let some ty := types[id]? | throw "source u128 type missing"
-  let layoutId ← (← field ty "layout").getNat?
-  let (payloads, payloadId, layout) ← layoutPayload root layoutId
-  let backend ← field layout "backend_repr"
-  let scalar ← field backend "scalar"
-  let range ← field scalar "valid_range"
-  let range ← replace range "end" last
-  let scalar ← replace scalar "valid_range" range
-  let backend ← replace backend "scalar" scalar
-  let layout ← replace layout "backend_repr" backend
-  replace root "layout_values" (.arr (payloads.set! payloadId layout))
-private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat × Nat) := do
-  let some ty := document.types.find? (·.id == id) | throw "source u128 type missing"
-  let some layout := document.layouts[ty.layoutId]? | throw "physical layout missing"
-  let some backend := layout.backendRepresentation | throw "scalar backend missing"
-  let some scalar := backend.scalar | throw "scalar missing"
-  let some range := scalar.validRange | throw "range missing"
-  pure range
+
+-- Schema 15 carries pattern range bounds as type-constant valtrees; scalar
+-- layout ranges themselves are calculated from the type, not serialized.
+private def changeBound (root : Json) (id : Nat) (bits : Json) : Except String Json := do
+  let constants ← (← field root "type_constants").getArr?
+  let some constant := constants[id]? | throw "pattern bound constant missing"
+  let value ← replace (← field constant "value") "bits_unsigned" bits
+  let constant ← replace constant "value" value
+  replace root "type_constants" (.arr (constants.set! id constant))
+
+private def bound (document : ImportDocument) (id : Nat) : Except String Nat := do
+  let some (.Value _ tree) := document.typeConstants[id]? | throw "pattern bound is not concrete"
+  let some (.Leaf bits _) := tree.nodes[tree.root]? | throw "pattern bound is not scalar"
+  pure bits
 
 def main (args : List String) : IO Unit := do
   let path::_ := args | throw (IO.userError "missing exported JSON")
@@ -47,38 +32,33 @@ def main (args : List String) : IO Unit := do
   let primitive ← must (field (← must (field original "compiler_runtime_primitives")) "u128")
   let id ← must primitive.getNat?
   let decoded ← must (decodeJson source)
-  let range ← must (rangeOf decoded.document id)
-  check (range == (0,2^128-1)) "actual compiler u128 range was clipped"
   let metadata ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   let layout ← must ((metadata.lookup id).mapError toString)
   match layout.layout.backendRepr with
   | .Scalar (.Initialized (value := .Int .I128 false) (validRange := range)) =>
     check (range.start.toNat == 0 && range.end.toNat == 2^128-1) "runtime u128 range changed"
   | _ => throw (IO.userError "runtime u128 scalar shape changed")
-  for value in [0,2^64,2^128-1] do
-    for encoded in [Json.str (toString value), toJson value] do
-      let edited ← must (changeEnd original id encoded)
-      let decoded ← must (decodeJson edited.compress)
-      check ((← must (rangeOf decoded.document id)).2 == value) "decimal/numeric natural changed"
   check (metadata.source.types.any fun node =>
     (metadata.lookup node.id).toOption.any fun value => value.layout.largestNiche.any fun niche =>
       niche.value == .Int .I128 false && niche.validRange.start.toNat == 1 &&
         niche.validRange.end.toNat == 2^128-1) "actual compiler u128 niche range changed"
-  let some nicheIndex := decoded.document.layouts.toList.findIdx? (fun layout =>
-    layout.largestNiche.any fun niche => niche.validRange.2 == 2^128-1)
-    | throw (IO.userError "actual NonZeroU128 niche missing")
-  let (payloads, nichePayloadId, nicheLayout) ← must (layoutPayload original nicheIndex)
+  let some pattern := decoded.document.types.find? (fun node => match node.shape with
+      | .patternType base (.range _ _) => base == id
+      | _ => false) | throw (IO.userError "actual u128 pattern range missing")
+  let .patternType _ (.range start finish) := pattern.shape
+    | throw (IO.userError "actual u128 pattern range changed")
+  check ((← must (bound decoded.document start)) == 1 &&
+    (← must (bound decoded.document finish)) == 2^128-1) "actual pattern bounds changed"
+  for value in [0,2^64,2^128-1] do
+    let edited ← must (changeBound original finish (Json.str (toString value)))
+    let decoded ← must (decodeJson edited.compress)
+    check ((← must (bound decoded.document finish)) == value) "decimal natural changed"
+    let numeric ← must (changeBound original finish (toJson value))
+    check (!(decodeJson numeric.compress).isOk) "numeric valtree bits accepted instead of decimal text"
   let invalid : List Json := [Json.str "", .str "-1", .str "+1", .str "1_0", .str "0xFF", .str "1.0",
     .str (toString (2^128 : Nat)), toJson (2^128 : Nat), toJson (-1 : Int), .bool true, .null]
-  for encoded in invalid do
-    let edited ← must (changeEnd original id encoded)
-    check (!(decodeJson edited.compress).isOk) s!"invalid u128 range accepted: {encoded.compress}"
-    let niche ← must (field nicheLayout "largest_niche")
-    let range ← must (field niche "valid_range")
-    let range ← must (replace range "end" encoded)
-    let niche ← must (replace niche "valid_range" range)
-    let payload ← must (replace nicheLayout "largest_niche" niche)
-    let edited ← must (replace original "layout_values" (.arr (payloads.set! nichePayloadId payload)))
-    check (!(decodeJson edited.compress).isOk)
-      s!"invalid niche endpoint accepted: {encoded.compress}"
-  IO.println "actual u128 compiler/runtime range exact; 6 decimal/numeric cases preserved and 11 malformed/overflow scalar and niche cases rejected"
+  for id in [start, finish] do
+    for encoded in invalid do
+      let edited ← must (changeBound original id encoded)
+      check (!(decodeJson edited.compress).isOk) s!"invalid pattern endpoint accepted: {encoded.compress}"
+  IO.println "actual u128 runtime range and niche exact; pattern bounds preserve decimal values and reject malformed inputs"

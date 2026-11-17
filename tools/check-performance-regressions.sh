@@ -20,7 +20,7 @@ export PATH="$performance_sysroot/bin:$PATH"
 export LD_LIBRARY_PATH="$performance_sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 rustup run "$performance_toolchain" cargo build --locked --offline --manifest-path exporter/Cargo.toml
 exporter/target/debug/lean-miri-mir-exporter \
-  --output scratch/decoder-id-inputs/genuine-mir-features.json --root direct_tag_value --root get_vtable_root --root as_trait_object --root as_drop_trait_object --root call_trait_object --root make_link --root promoted_ref --root byte_string --root pointer_slice --root read_tls --root id --root array_len --root exercise exporter/fixtures/mir_features.rs \
+  --output scratch/decoder-id-inputs/genuine-mir-features.json --root direct_tag_value --root get_vtable_root --root as_trait_object --root as_drop_trait_object --root call_trait_object --root make_link --root promoted_ref --root byte_string --root pointer_slice --root get_static_ptr --root read_tls --root id --root array_len --root exercise exporter/fixtures/mir_features.rs \
   --crate-type=lib --crate-name=mir_features
 # Retain exact type-name catalog controls alongside indexed preparation checks.
 exporter/target/debug/lean-miri-mir-exporter \

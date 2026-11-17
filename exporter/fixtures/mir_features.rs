@@ -92,6 +92,10 @@ pub static STATIC_DATA: [u32; 2] = [11, 13];
 #[thread_local]
 pub static TLS_WORD: u32 = 17;
 
+pub fn get_static_ptr() -> *const [u32; 2] {
+    &raw const STATIC_DATA
+}
+
 pub const STATIC_REF: &'static [u32; 2] = &STATIC_DATA;
 
 pub fn read_tls() -> u32 {

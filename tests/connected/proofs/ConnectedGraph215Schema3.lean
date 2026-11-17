@@ -646,11 +646,11 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
             payload := {afterCallbacks.machine.user.user.payload with payload := changedWorld}}
           let changedStorage := {afterCallbacks.machine.user with user := changedValidity}
           {afterCallbacks with machine := {afterCallbacks.machine with user := changedStorage}}
-        let some firstLayout := source.layouts[0]?
-          | throw "fixture unexpectedly has no compiler layouts"
-        let changedLayoutsState := withSource
-          {source with layouts := source.layouts.push firstLayout}
-        let changedLayoutsEq := decide (afterCallbacks = changedLayoutsState)
+        let some firstType := source.types[0]?
+          | throw "fixture unexpectedly has no compiler types"
+        let changedTypesState := withSource
+          {source with types := source.types.push firstType}
+        let changedTypesEq := decide (afterCallbacks = changedTypesState)
         let changedSettingsState := withSource {source with producerSettings :=
           {source.producerSettings with qualification := source.producerSettings.qualification ++ ".changed"}}
         let changedSettingsEq := decide (afterCallbacks = changedSettingsState)
@@ -658,11 +658,11 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
         let timestampRetag := Miri.Concurrency.VTimestamp.ofPacked 3 (by decide)
         let timestampSameTime := Miri.Concurrency.VTimestamp.sameTime timestampRead timestampRetag
         let timestampExactEq := decide (timestampRead = timestampRetag)
-        unless stateSelfEq && rebuiltStateEq && !changedLedgerEq && !changedLayoutsEq &&
+        unless stateSelfEq && rebuiltStateEq && !changedLedgerEq && !changedTypesEq &&
             !changedSettingsEq && timestampSameTime && !timestampExactEq do
-          throw s!"exact equality runtime smoke failed: self={stateSelfEq}; rebuilt={rebuiltStateEq}; changed_generated={changedLedgerEq}; changed_layouts={changedLayoutsEq}; changed_settings={changedSettingsEq}; timestamp_same_time={timestampSameTime}; timestamp_exact={timestampExactEq}"
+          throw s!"exact equality runtime smoke failed: self={stateSelfEq}; rebuilt={rebuiltStateEq}; changed_generated={changedLedgerEq}; changed_types={changedTypesEq}; changed_settings={changedSettingsEq}; timestamp_same_time={timestampSameTime}; timestamp_exact={timestampExactEq}"
         let graph := exploreConnected loop choiceAccess afterCallbacks nodeBudget
-        pure s!"canonical_source_route=makeFromSourcePackage+callbackBuilder+MiriConnected+hooksFromSource\nequality_smoke=self_eq={stateSelfEq};rebuilt_eq={rebuiltStateEq};changed_generated_eq={changedLedgerEq};changed_layouts_eq={changedLayoutsEq};changed_settings_eq={changedSettingsEq};timestamp_same_time={timestampSameTime};timestamp_exact_eq={timestampExactEq}\nsource_entry=miri_start; scheduler=fixedScheduling_false; foreign=canonical Unix/Pthread\n{renderGraphReport graph}"
+        pure s!"canonical_source_route=makeFromSourcePackage+callbackBuilder+MiriConnected+hooksFromSource\nequality_smoke=self_eq={stateSelfEq};rebuilt_eq={rebuiltStateEq};changed_generated_eq={changedLedgerEq};changed_types_eq={changedTypesEq};changed_settings_eq={changedSettingsEq};timestamp_same_time={timestampSameTime};timestamp_exact_eq={timestampExactEq}\nsource_entry=miri_start; scheduler=fixedScheduling_false; foreign=canonical Unix/Pthread\n{renderGraphReport graph}"
 
 def mainWithEq [DecidableEq OuterState] (args : List String) : IO Unit := do
   let some input := args.head? | throw (IO.userError "usage: ConnectedGraph215 <untouched-export.json> [node-budget]")

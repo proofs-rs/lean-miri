@@ -2931,6 +2931,12 @@ fn type_json_inner<'tcx>(
                     ty::Unnormalized::new_wip(query_ty),
                 )
                 .map_err(|error| format!("source type normalization failed: {error:?}"))?;
+            // rustc's project_to_ptr_in_box constructs this exact pointer for
+            // every visited Box before transmuting its pointer field.
+            if normalized.is_box() {
+                let pointee = normalized.boxed_ty().expect("Box has a pointee type");
+                type_json(context, tcx, ty::Ty::new_mut_ptr(tcx, pointee))?;
+            }
             type_json(context, tcx, normalized)?
         },
         closure_upvars: closure_upvars

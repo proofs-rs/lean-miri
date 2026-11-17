@@ -34,7 +34,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='lean-miri-execution-') as temporary:
         tmp = Path(temporary)
         exported = tmp/'selected.json'
-        subprocess.run([str(EXPORTER),'--output',str(exported),'--root','root','--root','DATA',str(source),'--crate-type=lib','--crate-name=fixture_globals'],cwd=ROOT,env=env,check=True)
+        subprocess.run([str(EXPORTER),'--output',str(exported),'--root','root',str(source),'--crate-type=lib','--crate-name=fixture_globals'],cwd=ROOT,env=env,check=True)
         document = load_mir_document(exported)
         assert document['producer']['rustc_commit'] == lock['pins']['rustc']['commit']
         assert document['producer']['miri_commit'] == lock['pins']['miri']['commit']

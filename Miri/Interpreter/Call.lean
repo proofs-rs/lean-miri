@@ -65,6 +65,7 @@ structure CallHooks (P S C E Other Extern FnABI ArgABI : Type) where
   getFrame : CallM S (Frame P LocalLayout E)
   setFrame : Frame P LocalLayout E → CallM S Unit
   frameIndex : CallM S Nat
+  stackIsEmpty : CallM S Bool
   evalOperand : C → MIR.Operand → CallM S (OpTy P)
   evalPlace : C → MIR.Place → Bool → CallM S (RuntimeStackPlace P)
   placeToOp : C → RuntimeStackPlace P → CallM S (OpTy P)
@@ -444,7 +445,7 @@ def evalCallTerminator (h : Hooks) (choice : C) (budget : Nat) (terminator : Ter
     initFnCall h choice budget ⟨evaluated.callee, evaluated.callerAbi, evaluated.fnAbi, evaluated.args,
       evaluated.withCallerLocation, destPlace, target,
       if evaluated.fnAbi.any h.abiCanUnwind then unwind else .Unreachable⟩
-    if target.isSome then
+    unless ← h.stackIsEmpty do
       if (← h.frameIndex) == oldIndex then
         if (← h.getFrame).location == oldLoc then
           throw (.invalidProgram "evaluating this call made no progress")

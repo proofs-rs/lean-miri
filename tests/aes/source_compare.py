@@ -23,13 +23,14 @@ for width in [32,64]:
  wrapper+=f'pub fn qa_round{width}(block:&mut Block,key:&Block,inverse:bool){{if inverse{{backends::soft::hazmat::equiv_inv_cipher_round_generic::<u{width}>(block,key)}}else{{backends::soft::hazmat::cipher_round_generic::<u{width}>(block,key)}}}}\n'
  wrapper+=f'pub fn qa_mix{width}(block:&mut Block,inverse:bool){{if inverse{{backends::soft::hazmat::inv_mix_columns_generic::<u{width}>(block)}}else{{backends::soft::hazmat::mix_columns_generic::<u{width}>(block)}}}}\n'
 with (copy/'src/lib.rs').open('a') as f:f.write(wrapper)
-(oracle/'Cargo.toml').write_text('[package]\nname="lean-miri-aes-source-oracle"\nversion="0.1.0"\nedition="2024"\n[dependencies]\naes={path="../aes",features=["hazmat"]}\nlibc="=0.2.189"\n')
+pinned=tomllib.loads((ROOT/'upstream/miri-source/Cargo.lock').read_text())
+libc=next(p['version'] for p in pinned['package'] if p['name']=='libc')
+(oracle/'Cargo.toml').write_text('[package]\nname="lean-miri-aes-source-oracle"\nversion="0.1.0"\nedition="2024"\n[dependencies]\naes={path="../aes",features=["hazmat"]}\nlibc="='+libc+'"\n')
 shutil.copyfile(ROOT/'tests/aes/Oracle.rs',oracle/'src/main.rs')
 env={**os.environ,'ELAN_HOME':str(ROOT/'.elan'),'CARGO_HOME':str(ROOT/'.cargo'),'CARGO_TARGET_DIR':str(work/'target'),'RUSTC':str(ROOT/'.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc'),'RUSTFLAGS':'--cfg aes_backend="soft" --cap-lints allow'}
 cargo=str(ROOT/'.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo')
 cargo_command=[cargo,'--config',str(ROOT/'scratch/cargo-vendor.toml')]
 subprocess.run(cargo_command+['generate-lockfile','--offline','--manifest-path',str(oracle/'Cargo.toml')],env=env,cwd=ROOT,check=True)
-pinned=tomllib.loads((ROOT/'upstream/miri-source/Cargo.lock').read_text())
 versions={(p['name'],p['version']):p.get('checksum') for p in pinned['package']}
 actual=tomllib.loads((oracle/'Cargo.lock').read_text())
 # The shared offline vendor directory may contain versions from other tasks.

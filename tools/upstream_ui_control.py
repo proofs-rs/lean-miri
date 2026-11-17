@@ -57,6 +57,7 @@ PROFILE_BOOL_FIELDS = {
 PROFILE_FIELDS = PROFILE_BOOL_FIELDS | {
     'num_cpus', 'environment_policy', 'argv0', 'rng_seed', 'choice_policy',
     'borrow_tracker', 'tree_borrows', 'validation', 'alignment_check', 'provenance_mode',
+    'float_rounding_error_mode',
     'native_libraries', 'cmpxchg_weak_failure_rate', 'address_reuse_cross_thread_rate'}
 FRAME_RAW_FIELDS = {'raw_file', 'raw_line', 'raw_end_line', 'raw_column',
                     'lo', 'hi', 'body_id', 'span_id'}
@@ -80,7 +81,8 @@ def _validate_profile(profile):
             ('environment_policy', ('empty',)), ('choice_policy', ('seeded-generated-0',)),
             ('borrow_tracker', ('tree_borrows', 'none')), ('validation', ('No', 'Shallow', 'Deep')),
             ('alignment_check', ('None', 'Int', 'Symbolic')),
-            ('provenance_mode', ('Default', 'Strict', 'Permissive'))):
+            ('provenance_mode', ('Default', 'Strict', 'Permissive')),
+            ('float_rounding_error_mode', ('None', 'Random', 'Max'))):
         if profile[name] not in allowed:
             raise ControlProtocolError('unknown profile enum')
     tree = profile['tree_borrows']

@@ -239,6 +239,45 @@ remain separate from the finite checks performed for this synchronization.
 
 ### Hosted regressions and coverage
 
+At main `45640654`, the [hosted regression
+run](https://github.com/proofs-rs/lean-miri/actions/runs/44004172382) failed all four
+lanes. Local follow-up repairs the reference-profile patch application, scheduler
+source-prefix extraction, detached-join source-order extraction, and AES oracle dependency
+pin. The profile exporter builds locally and an empty guest records seed 2, preemption
+rate 0 and the requested argv0 with exit zero; the scheduler, detached-join and 924-case
+AES comparisons pass. This does not establish that the replay or extended lanes pass. The
+constant suite passes with explicit function roots and calculated layouts; its actual
+raw-pointer compiler operand retains the existing provenance and initialization checks.
+Explicitly rooting STATIC_REF still fails with a non-function source ABI error. The
+source-extracted selector now checks separately audited current Miri/rustc pins; all
+six SeqCst and twenty Relaxed projected outcomes match Lean. Other reported failures
+remain unresolved. Replay of the retained `192-released-natural-exit` input fails
+before execution because its older target layout omits `x87_f80_align_bytes`. A fresh
+export with the reviewed Miri configuration and Lean both terminate successfully, but
+Lean reports choice cursor 304 instead of the retained expectation 300; the difference
+requires review before updating that assertion. Fresh runtime-type closure now resolves
+the LateOnly layout and both exact vtable method slots from current source material; this
+does not prove arbitrary runtime constructor closure. The decoder and optimization scripts pass after
+migrating their catalog and fixture tests, and the connected-proof script passes its 76,698-declaration
+axiom audit and graph harness typecheck with type-table equality in place of the removed
+layout table. Fresh powi-zero checks both current generic intrinsics against Miri and Lean for 16 inputs. The fresh u128 producer comparison
+passes against 35 layouts; pattern-bound parsing preserves decimal values and rejects
+malformed endpoints, including underscores, on both bounds. The full regression lane, including all 66 stages and both fixture hash checks, passed
+in one local run after the Box pointer-material and UI profile changes, before the
+subsequent call-progress fix. A fresh run and hosted rerun remain necessary.
+
+For the current UI failure cohort, the exporter now retains the exact mutable
+pointer type required by rustc's Box field projection. The unchanged
+`pass/slices.rs@tree_implicit_writes` case passes against both Miri and Lean.
+The UI runner now uses the reference's random floating-point error mode and
+includes that mode in the validated profile; the unchanged
+`pass/float_extra_rounding_error.rs@random` case passes with 144 ULP choices.
+The call-progress check now accepts a cleared stack, matching the pinned rustc
+exit path while rejecting an unchanged nonempty stack; `pass/shims/exit_unit.rs`
+passes locally. These focused cases do not establish a successful full UI sweep.
+The unchanged `pass/shims/x86/rounding-error.rs` case has a successful Miri
+reference but the Lean run timed out at 600 seconds; it remains unresolved.
+
 At merged main `6a76fcbd2f24afaf6c0114efc205479560fb280b`, the
 [Miri regression run](https://github.com/proofs-rs/lean-miri/actions/runs/43069997521)
 passed the regression, fresh and replay lanes. Extended passed 21 of 22 suites;
