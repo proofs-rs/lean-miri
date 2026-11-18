@@ -84,6 +84,38 @@ def evalStatement (hooks : Hooks) (choice : C) (stmt : Statement)
 private def finish (result : StepResult State Unit) : StepResult State Bool :=
   (result.1, result.2.map fun _ => true)
 
+/-- Apply the driver's post-statement checks and advance the resulting frame. -/
+abbrev finishStatement (oldIndex : Nat) (outcome : StepResult State Unit) :
+    StepResult State Bool := Id.run do
+  let (state, result) := outcome
+  match result with
+  | .error error => return (state, .error error)
+  | .ok () =>
+    let newIndex := state.stack.frames.size - 1
+    if oldIndex != newIndex then
+      return (state, .error (.frameIndexChanged oldIndex newIndex))
+    let some current := state.stack.currentFrame? |
+      return (state, .error (.stack .emptyStack))
+    let .mir currentLoc := current.location |
+      return (state, .error .expectedMirLocation)
+    -- Advance the current location, not the saved location: callbacks may change it.
+    let next := { currentLoc with statementIndex := currentLoc.statementIndex + 1 }
+    -- Source increments without re-validating the location against its body.
+    let index := state.stack.frames.size - 1
+    if h : index < state.stack.frames.size then
+      let stack := { state.stack with frames := state.stack.frames.set index (
+        { current with location := .mir next }) h }
+      return ({ state with stack }, .ok true)
+    return (state, .error (.stack .emptyStack))
+
+/-- Run the terminator pre-hook and dispatch the originally selected terminator. -/
+abbrev runTerminator (hooks : Hooks) (choice : C) (terminator : Terminator)
+    (state : State) : StepResult State Bool := Id.run do
+  let (state, result) := hooks.beforeTerminator choice state
+  match result with
+  | .error error => return (state, .error error)
+  | .ok () => return finish (hooks.terminator choice terminator state)
+
 /-- Execute exactly one source driver iteration. A callback failure retains
 its resulting state and stops immediately, before any subsequent operation. -/
 def step (hooks : Hooks) (choice : C) (state : State) : StepResult State Bool := Id.run do
@@ -97,32 +129,8 @@ def step (hooks : Hooks) (choice : C) (state : State) : StepResult State Bool :=
         return (state, .error (.invalidBlock loc.block))
       match block.statements[loc.statementIndex]? with
       | some stmt =>
-        let oldIndex := state.stack.frames.size - 1
-        let (state, result) := evalStatement hooks choice stmt state
-        match result with
-        | .error error => return (state, .error error)
-        | .ok () =>
-          let newIndex := state.stack.frames.size - 1
-          if oldIndex != newIndex then
-            return (state, .error (.frameIndexChanged oldIndex newIndex))
-          let some current := state.stack.currentFrame? |
-            return (state, .error (.stack .emptyStack))
-          let .mir currentLoc := current.location |
-            return (state, .error .expectedMirLocation)
-          -- Advance the current location, not the saved location: callbacks may change it.
-          let next := { currentLoc with statementIndex := currentLoc.statementIndex + 1 }
-          -- Source increments without re-validating the location against its body.
-          let index := state.stack.frames.size - 1
-          if h : index < state.stack.frames.size then
-            let stack := { state.stack with frames := state.stack.frames.set index (
-              { current with location := .mir next }) h }
-            return ({ state with stack }, .ok true)
-          return (state, .error (.stack .emptyStack))
-      | none =>
-        let (state, result) := hooks.beforeTerminator choice state
-        match result with
-        | .error error => return (state, .error error)
-        | .ok () => return finish (hooks.terminator choice block.terminator state)
+        return finishStatement (state.stack.frames.size - 1) (evalStatement hooks choice stmt state)
+      | none => return runTerminator hooks choice block.terminator state
 
 /-- Relational semantics quantifies over permitted explicit choice inputs.
 No enumeration or finite-support assumption is imposed on machine choices. -/

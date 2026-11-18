@@ -48,6 +48,27 @@ theorem noUB_iff_initialization_and_scoped (s : Static) (p : Packet) :
     | execution initialized reachable inside outcome =>
       exact execution _ initialized _ reachable inside _ trivial _ _ outcome
 
+/-- Reuse a callee's body proof after checking actual frame preparation. -/
+theorem of_body (s : Static) (p : Packet) (pre : State → Prop)
+    (prepareError : ∀ failed error, install s p = .error error failed →
+      RunLoop.reportsUB error = false)
+    (prepared : ∀ entry, install s p = .ok () entry →
+      depth p ≤ entry.stack.frames.size ∧ pre entry)
+    (body : ∀ entry, pre entry → ScopedSafety.NoUB s.cfg s.limits (fun _ _ => True)
+      (depth p) entry) :
+    NoUB s p := by
+  have checked := Miri.Verification.FunctionBody.CallNoUB.of_preparation
+    (step := ExecutionMachine.step s.cfg s.limits)
+    (stackDepth := fun state => state.stack.frames.size) (allowed := fun _ _ => True)
+    (depth := depth p) (install s p) pre prepareError prepared body
+  apply (noUB_iff_initialization_and_scoped s p).mpr
+  constructor
+  · intro error failed actual
+    simpa only [Miri.Verification.FunctionBody.CallNoUB, actual] using checked
+  · intro entry actual
+    simp only [Miri.Verification.FunctionBody.CallNoUB, actual] at checked
+    exact checked.2
+
 /-- A successful-return result remains a useful conditional corollary, but it
 is not the resource-independent target and is not needed to define NoUB. -/
 theorem of_result (s : Static) (p : Packet) (preserves : Packet → State → Prop)

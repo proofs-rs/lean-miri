@@ -1154,9 +1154,24 @@ execution model.
 
 These gaps remain in the backlog, without implying that the whole feature is
 unimplemented. Check existing support against pinned upstream before extending
-it; preserve implementations and fail-closed Unsupported outcomes. WP remains
-deferred with its implementation removed. GenMC is removed; available race
-tracking modes are disabled tracking and the Miri vector-clock backend.
+it; preserve implementations and fail-closed Unsupported outcomes. GenMC is
+removed; available race tracking modes are disabled tracking and the Miri
+vector-clock backend.
+
+* **WP and VC generation** — [StepWP](Miri/Verification/StepWP.lean) lowers
+  one-block MIR bodies ending in `Return` to checked instruction sequences.
+  [BodyVCGen](examples/empty_function/BodyVCGen.lean) uses the imported
+  `empty_function` body for the whole-local immediate caller case and
+  composes its proof with actual frame preparation after callee resolution.
+  Driver rules and [effect specs](Miri/Verification/EffectSpecs.lean) cover
+  the MIR operators in the [duplicate_prefix export](https://github.com/proofs-rs/lean-miri/blob/7950c01b18013969c360df535b8b888dd6181dff/examples/duplicate_prefix/input.json),
+  including its retained callees. `body_of_blocks` composes block VCs across
+  branches and loops given an entry invariant and a scope-exit postcondition.
+  `callPre_of_contract` composes the actual frame preparation with a callee
+  contract. The ordinary-input proof in PR #12 targets a different
+  Tree Borrows wildcard traversal. The current interpreter still needs
+  `duplicate_prefix` block invariants and call contracts, a whole-run
+  proof, and timing measurements.
 
 * **Windows / peripheral OS facilities** —
   [WindowsPlatform](Miri/Interpreter/WindowsPlatform.lean), `MiriTests/Native/`

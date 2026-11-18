@@ -31,7 +31,7 @@ logs and generated inventories under ignored scratch/ or upload them as CI artif
 * Use the fixed MIR interpreter with MIR and compiler metadata as Lean constant
   data. Public import/contract APIs remain experimental. Client proofs must pin
   an immutable library revision and must not change its semantics to obtain a proof.
-* WP is deferred; do not reintroduce its implementation or dependencies.
+* Keep WP and VC generation layered over the fixed interpreter semantics.
 
 ## Changes and verification
 

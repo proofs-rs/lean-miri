@@ -209,6 +209,6 @@ theorem assignment_driver (hooks : StepHooks Provenance LocalLayout MachineHooks
     beforeLoc, found, first]
   simp only [current, LocalUnit.current] at evaluated
   erw [evaluated]
-  simp [current, LocalUnit.current, Stack.currentFrame?, afterLoc, Array.set_push]
+  simp [Step.finishStatement, current, LocalUnit.current, Stack.currentFrame?, afterLoc, Array.set_push]
 
 end EmptyFunction.BodyStep

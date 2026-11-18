@@ -40,3 +40,5 @@ import MiriTests.Safety.OperationalSafety
 import MiriTests.ScalarOps.ScalarOps
 import MiriTests.Scheduling.Stateful
 import MiriTests.Step.Driver
+import MiriTests.Verification.DuplicatePrefixOps
+import MiriTests.Verification.StepWP

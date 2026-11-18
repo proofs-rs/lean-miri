@@ -99,17 +99,14 @@ theorem step_hook_error (s : Static) (metadata : Metadata s)
   generalize actualHooks : ExecutionMachine.stepHooks s.cfg s.limits = hooks at hook ⊢
   cases hooks
   unfold Step.step
-  simp only [LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,absent,
+  simp only [Step.runTerminator, LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,absent,
     Id.run,bind,Bind.bind,pure,Pure.pure] at hook ⊢
   rw [hook]
 
 private theorem return_terminator (s : Static) (term : Terminator) (kind : term.kind = .Return) :
     (ExecutionMachine.stepHooks s.cfg s.limits).terminator () term =
-      (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false := by
-  funext state
-  unfold ExecutionMachine.stepHooks
-  simp only [ControlFlow.evalTerminator,kind]
-  rfl
+      (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false :=
+  funext (ExecutionMachine.stepHooks_return s.cfg s.limits () term kind)
 
 theorem step_return_error (s : Static) (metadata : Metadata s)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F) (before afterHook : Machine)
@@ -127,7 +124,7 @@ theorem step_return_error (s : Static) (metadata : Metadata s)
   generalize actualHooks : ExecutionMachine.stepHooks s.cfg s.limits = hooks at hook returned term ⊢
   cases hooks
   unfold Step.step
-  simp only [LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,absent,
+  simp only [Step.runTerminator, LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,absent,
     Id.run,bind,Bind.bind,pure,Pure.pure] at hook returned term ⊢
   rw [hook,term,returned]
   rfl

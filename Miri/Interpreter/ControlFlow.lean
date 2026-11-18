@@ -140,6 +140,68 @@ def isOptionalOverflowCheck : AssertKind → Bool
   | .Overflow .Shl .. | .Overflow .Shr .. | .OverflowNeg .. => true
   | _ => false
 
+/-- Compare cases in source order, preserving every comparison's state and
+the first matching target. The default is used when no case matches. -/
+def selectSwitchTarget (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
+    (value : Imm) (targets : SwitchTargets) (state : State) : StepResult State BasicBlockId := Id.run do
+  let mut state := state
+  let mut target := targets.otherwise
+  for case in targets.cases do
+    let .Case bits block := case
+    let (next, comparison) := hooks.compareSwitchCase choice value bits state
+    state := next
+    match comparison with
+    | .error error => return (state, .error error)
+    | .ok true => target := block; break
+    | .ok false => pure ()
+  return (state, .ok target)
+
+/-- Read the discriminant and jump to the selected successor. -/
+def evalSwitchInt (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
+    (discr : MIR.Operand) (targets : SwitchTargets) (state : State) : StepResult State Unit := Id.run do
+  let (state, value) := hooks.evalDiscriminant choice discr state
+  let value ← match value with
+    | .error error => return (state, .error error)
+    | .ok value => pure value
+  let (state, selected) := selectSwitchTarget hooks choice value targets state
+  match selected with
+  | .error error => return (state, .error error)
+  | .ok target => return goToBlock target state
+
+/-- Execute the selected MIR terminator after the driver's pre-hook. -/
+def evalCall (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
+    (terminator : Terminator) (target : Option BasicBlockId) (state : State) : StepResult State Unit := Id.run do
+  let oldIndex := state.stack.frames.size
+  let oldLoc := state.stack.currentFrame?.map (·.location)
+  let (state, result) := hooks.call choice terminator state
+  match result with
+  | .error error => return (state, .error error)
+  | .ok () =>
+    if target.isSome && state.stack.frames.size == oldIndex &&
+        state.stack.currentFrame?.map (·.location) == oldLoc then
+      return (state, .error (.invalidProgram "evaluating this call made no progress"))
+    return (state, .ok ())
+
+/-- Execute the selected MIR terminator after the driver's pre-hook. -/
+def evalDrop (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
+    (place : Place) (target : BasicBlockId) (unwind : UnwindAction)
+    (asyncDrop : Option BasicBlockId) (state : State) : StepResult State Unit := Id.run do
+  if asyncDrop.isSome then
+    return (state, .error (.invalidProgram "Async Drop must be expanded or reset to sync"))
+  return hooks.drop choice place target unwind state
+
+/-- Execute the selected MIR terminator after the driver's pre-hook. -/
+def evalAssert (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
+    (condition : MIR.Operand) (expected : Bool) (message : AssertKind)
+    (target : BasicBlockId) (unwind : UnwindAction) (state : State) : StepResult State Unit := Id.run do
+  let ignored := hooks.ignoreOptionalOverflowChecks state && isOptionalOverflowCheck message
+  let (state, value) := hooks.readAssertCondition choice condition state
+  match value with
+  | .error error => return (state, .error error)
+  | .ok value =>
+    if ignored || expected == value then return goToBlock target state
+    return hooks.assertPanic choice message unwind state
+
 def evalTerminator (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
     (terminator : Terminator) (state : State) : StepResult State Unit := Id.run do
   match terminator.kind with
@@ -151,33 +213,8 @@ def evalTerminator (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
   | .InlineAsm _ => return (state, .error (.unsupported "inline assembly"))
   | .FalseEdge .. | .FalseUnwind .. | .Yield .. | .CoroutineDrop =>
     return (state, .error (.invalidProgram "terminator should have been eliminated by MIR pass"))
-  | .SwitchInt discr targets =>
-    let (state, value) := hooks.evalDiscriminant choice discr state
-    let value ← match value with
-      | .error error => return (state, .error error)
-      | .ok value => pure value
-    let mut state := state
-    let mut target := targets.otherwise
-    for case in targets.cases do
-      let .Case bits block := case
-      let (next, comparison) := hooks.compareSwitchCase choice value bits state
-      state := next
-      match comparison with
-      | .error error => return (state, .error error)
-      | .ok true => target := block; break
-      | .ok false => pure ()
-    return goToBlock target state
-  | .Call _ _ _ target .. =>
-    let oldIndex := state.stack.frames.size
-    let oldLoc := state.stack.currentFrame?.map (·.location)
-    let (state, result) := hooks.call choice terminator state
-    match result with
-    | .error error => return (state, .error error)
-    | .ok () =>
-      if target.isSome && state.stack.frames.size == oldIndex &&
-          state.stack.currentFrame?.map (·.location) == oldLoc then
-        return (state, .error (.invalidProgram "evaluating this call made no progress"))
-      return (state, .ok ())
+  | .SwitchInt discr targets => return evalSwitchInt hooks choice discr targets state
+  | .Call _ _ _ target .. => return evalCall hooks choice terminator target state
   | .TailCall .. =>
     let oldIndex := state.stack.frames.size
     let (state, result) := hooks.tailCall choice terminator state
@@ -187,18 +224,8 @@ def evalTerminator (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
       if state.stack.frames.size != oldIndex then
         return (state, .error (.invalidProgram "tail call changed frame index"))
       return (state, .ok ())
-  | .Drop place target unwind _ asyncDrop =>
-    if asyncDrop.isSome then
-      return (state, .error (.invalidProgram "Async Drop must be expanded or reset to sync"))
-    return hooks.drop choice place target unwind state
-  | .Assert condition expected message target unwind =>
-    let ignored := hooks.ignoreOptionalOverflowChecks state && isOptionalOverflowCheck message
-    let (state, value) := hooks.readAssertCondition choice condition state
-    match value with
-    | .error error => return (state, .error error)
-    | .ok value =>
-      if ignored || expected == value then return goToBlock target state
-      return hooks.assertPanic choice message unwind state
+  | .Drop place target unwind _ asyncDrop => return evalDrop hooks choice place target unwind asyncDrop state
+  | .Assert condition expected message target unwind => return evalAssert hooks choice condition expected message target unwind state
 
 end ControlFlow
 end Miri.Interpreter

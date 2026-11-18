@@ -185,11 +185,8 @@ bookkeeping and caller continuation restoration. -/
 
 private theorem return_terminator (s : Static) (term : Terminator) (kind : term.kind = .Return) :
     (ExecutionMachine.stepHooks s.cfg s.limits).terminator () term =
-      (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false := by
-  funext state
-  unfold ExecutionMachine.stepHooks
-  simp only [ControlFlow.evalTerminator,kind]
-  rfl
+      (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false :=
+  funext (ExecutionMachine.stepHooks_return s.cfg s.limits () term kind)
 
 /-- Compose the two separately proved machine operations at the actual fixed
 Return instruction. These operation equations are internal proof edges, not
@@ -210,7 +207,7 @@ initial-input validity or metadata assumptions. -/
   generalize actualHooks : ExecutionMachine.stepHooks s.cfg s.limits = hooks at hook returned term ⊢
   cases hooks
   unfold Step.step
-  simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,
+  simp only [Step.runTerminator, BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,
     location,block,absent,Id.run,bind,Bind.bind,pure,Pure.pure]
   simp only [BodyStep.current,LocalUnit.current] at hook returned term
   rw [hook]

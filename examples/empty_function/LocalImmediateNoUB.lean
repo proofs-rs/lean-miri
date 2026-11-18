@@ -3,6 +3,7 @@ import empty_function.LocalReturn
 import empty_function.LocalPost
 import empty_function.LocalImmediateTotal
 import empty_function.BodyTotal
+import empty_function.BodyVCGen
 import empty_function.CallLevelNoUB
 import empty_function.ScopedErrorSafety
 namespace EmptyFunction.LocalImmediateNoUB
@@ -31,7 +32,8 @@ set_option linter.unusedSimpArgs false
       frame.returnContinuation = CanonicalInit.normalizedContinuation s (.goto (some p.returnBlock) p.unwind) ∧
       frame.vaList = #[] ∧ machine.user.payload.ghost = false ∧ machine.user.payload.validation = .Shallow ∧
       (∃ previous, machine = LocalModel.initializedMachine s p input.tracker destination older bound frame previous) ∧
-      machine.borrowTracker = p.before.machine.borrowTracker := by
+      machine.borrowTracker = p.before.machine.borrowTracker ∧
+      BodyVCGen.assignment.matches installed := by
   obtain ⟨older,bound,entry,machine,original,installed,body,identity,function,location,locals,tracked,noClocks,
     returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,machineTracked⟩ :=
       LocalImmediateTotal.init_whole s metadata profile p runtime input destination whole value immediate
@@ -44,7 +46,7 @@ set_option linter.unusedSimpArgs false
   rw [entrySame] at first
   let next : LocalUnit.F := {(BodyStep.withUnit entry .uninit (some s.abi.ret.layout)) with location := .mir ⟨0,1⟩}
   refine ⟨older,bound,LocalUnit.current frames entry machine,next,machine,original,installed,?_,first,
-    ?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,noGhost,shallow,⟨previous,?_⟩,machineTracked⟩
+    ?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,noGhost,shallow,⟨previous,?_⟩,machineTracked,?_⟩
   · simp [LocalUnit.current,frames,depth,original]
   all_goals try rfl
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using body
@@ -55,8 +57,9 @@ set_option linter.unusedSimpArgs false
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using returnPlace
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using continuation
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using varargs
-  rw [machineEq]
-  rfl
+  · rw [machineEq]
+    rfl
+  · exact BodyVCGen.matchesAssignment (body.trans metadata.body) location
 
 private theorem two_step_noErrors (s : Static) (depth : Nat) (start middle finish : State)
     (first : ExecutionMachine.step s.cfg s.limits () start = (middle,.ok true))
@@ -137,7 +140,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
       finish = LocalModel.finish s p input.tracker destination older bound frame previous index := by
   have positive := InitializationPrefix.capacity_positive s
   obtain ⟨older,bound,installed,frame,machine,original,installEq,depthEq,first,body,identity,function,location,
-    locals,frameTracked,noClocks,returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,tracked⟩ :=
+    locals,frameTracked,noClocks,returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,tracked,atEntry⟩ :=
       init_body s metadata profile p runtime input remaining capacity validation destination whole value immediate
   let caller := LocalModel.caller s p input.tracker destination bound
   let frames := older.push caller
@@ -198,8 +201,22 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
     · simp [finish,ReturnContinuation.resume,original]
     · simp [finish,ReturnContinuation.resume,Stack.currentFrame?]
   have safe := two_step_noErrors s (depth p) installed (LocalUnit.current frames frame machine) finish first second outside
+  have bodySpec := BodyVCGen.body s (depth p) installed
+    (fun state => state = LocalUnit.current frames frame machine) (Returned p)
+    (by omega) atEntry (BodyVCGen.successfulStep s first rfl)
+    (fun state equal => equal.symm ▸ inside) (by
+      rintro _ rfl
+      exact ⟨BodyVCGen.matchesReturn (body.trans metadata.body) location,
+        BodyVCGen.successfulStep s second ⟨outside, returnedToCaller⟩⟩)
+  have call := BodyVCGen.directCall_spec s p installed (Returned p)
+    installEq depthEq bodySpec.1 bodySpec.2
+  have returnedFromBody := BodyVCGen.returned_of_call s p installed finish (Returned p) call installEq (by
+    have start := Miri.Verification.FunctionBody.Reachable.initial
+      (step := ExecutionMachine.step s.cfg s.limits) (stackDepth := fun state => state.stack.frames.size)
+      (allowed := BodyVCGen.permitted) (depth := depth p) (start := installed)
+    exact .next (.next start (by omega) trivial first) inside trivial second) outside
   refine ⟨installed,finish,older,bound,frame,previous,thread.topUserRelevantFrame.getD frames.size,
-    original,installEq,depthEq,trace,returnedToCaller,safe,ScopedSafety.noUB_of_noErrors safe,?_⟩
+    original,installEq,depthEq,trace,returnedFromBody,safe,bodySpec.1,?_⟩
   simp only [finish,finalMachine,post,LocalModel.finish,LocalModel.machine,machineEq,frames,caller]
 /-- Resource-independent UB freedom for the original whole-local immediate
 caller family. Errors during the body retain their actual failed states; the
@@ -228,39 +245,32 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
     obtain ⟨normalInstalled,finish,normalOlder,normalBound,normalFrame,normalPrevious,index,
       normalOriginal,normalInitialized,depthEq,execution,returned,safe,normalNoUB,finishEq⟩ :=
       run_operations s metadata profile p runtime input remaining capacity validation destination whole value immediate
-    apply (CallLevelNoUB.noUB_iff_initialization_and_scoped s p).mpr
-    constructor
-    · intro error failedState outcome
+    apply CallLevelNoUB.of_body s p (fun state => state = normalInstalled)
+    · intro failedState error outcome
       rw [normalInitialized] at outcome
       cases outcome
     · intro state outcome
       rw [normalInitialized] at outcome
       cases outcome
+      exact ⟨by omega, rfl⟩
+    · rintro _ rfl
       exact normalNoUB
-  · have bodySafe : ScopedSafety.NoUB s.cfg s.limits (fun _ _ => True) (depth p) installed := by
-      apply ScopedErrorSafety.noUB_of_invariant (fun state => state = installed)
-      · rfl
-      · intro before after choice equal inside permitted outcome
-        subst before
-        cases choice
-        change ExecutionMachine.step s.cfg s.limits () (LocalUnit.current frames frame machine) = _ at outcome
-        rw [failed] at outcome
-        cases outcome
-      · intro before after choice error equal inside permitted outcome
-        subst before
-        cases choice
-        change ExecutionMachine.step s.cfg s.limits () (LocalUnit.current frames frame machine) = _ at outcome
-        rw [failed] at outcome
-        cases outcome
-        rfl
-    apply (CallLevelNoUB.noUB_iff_initialization_and_scoped s p).mpr
-    constructor
-    · intro error failedState outcome
+  · have atEntry : BodyVCGen.assignment.matches installed :=
+      BodyVCGen.matchesAssignment (body.trans metadata.body) location
+    have inside : depth p ≤ installed.stack.frames.size := by
+      simp [installed, frames, LocalUnit.current, LocalInit.cachedState, depth, original]
+    have bodySafe := (BodyVCGen.body s (depth p) installed (fun _ => False) (fun _ => True)
+      inside atEntry (BodyVCGen.resourceStop s failed)
+      (fun _ impossible => impossible.elim) (fun _ impossible => impossible.elim)).1
+    apply CallLevelNoUB.of_body s p (fun state => state = installed)
+    · intro failedState error outcome
       rw [initialized] at outcome
       cases outcome
     · intro state outcome
       rw [initialized] at outcome
       cases outcome
+      exact ⟨inside, rfl⟩
+    · rintro _ rfl
       exact bodySafe
 
 open Lean Elab Command in
