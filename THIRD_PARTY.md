@@ -16,10 +16,6 @@ retain its notices with that code. Listing external code in the
 source lock does not mean it has been ported or that all its dependencies have
 been audited.
 
-The vendored Tree Borrows wildcard visitor carries a local workaround for
-[Miri issue #5543](https://github.com/rust-lang/miri/issues/5543). Its locked
-hash describes the patched copy.
-
 The local Lean/Elan and Rust/Rustup installations are development tools, not
 Lean-Miri semantics. They are excluded from version control. The Lean version is
 pinned in `lean-toolchain`; the compiler used for the standalone Rust comparison

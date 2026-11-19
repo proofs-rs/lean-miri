@@ -10,7 +10,7 @@ from pathlib import Path
 
 EXPECTED = {
     "wildcard": "a3f7d6176555d193163f909fbd48b08118294f8b",
-    "tree": "b4611f85d10bc02b139c025cc83377682c77ea13",
+    "tree": "b58a7cfeba92ece2dab1977f65f9070fd8cd71ad",
     "unimap": "6400a62f444f0a3ec481747e05fa90f2fb1cd40c",
 }
 

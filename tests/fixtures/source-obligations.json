@@ -1383,7 +1383,7 @@
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
       "line": 16,
       "category": "external_dependency",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "use rustc_abi::Size;",
       "review": "pending"
     },
@@ -1391,7 +1391,7 @@
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
       "line": 17,
       "category": "external_dependency",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "use rustc_data_structures::fx::FxHashSet;",
       "review": "pending"
     },
@@ -1399,7 +1399,7 @@
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
       "line": 18,
       "category": "external_dependency",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "use rustc_span::Span;",
       "review": "pending"
     },
@@ -1407,7 +1407,7 @@
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
       "line": 37,
       "category": "state_declaration",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "pub(super) struct LocationState {",
       "review": "pending"
     },
@@ -1415,7 +1415,7 @@
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
       "line": 262,
       "category": "state_declaration",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "pub struct LocationTree {",
       "review": "pending"
     },
@@ -1423,7 +1423,7 @@
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
       "line": 278,
       "category": "state_declaration",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "pub struct Tree {",
       "review": "pending"
     },
@@ -1431,15 +1431,15 @@
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
       "line": 312,
       "category": "state_declaration",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "pub(super) struct Node {",
       "review": "pending"
     },
     {
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-      "line": 1237,
+      "line": 1219,
       "category": "state_declaration",
-      "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+      "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
       "text": "pub enum AccessRelatedness {",
       "review": "pending"
     },

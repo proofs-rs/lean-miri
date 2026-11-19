@@ -1154,24 +1154,6 @@ impl<'tcx> LocationTree {
                     return Ok(());
                 };
 
-                // Local workaround for https://github.com/rust-lang/miri/issues/5543.
-                // Child transitions can make this access foreign after the preorder check.
-                // Retain their effects and the local permission entry above. Skip this
-                // node only when SIFA agrees and a foreign write (hence also a read)
-                // leaves this permission unchanged without violating a protector.
-                let foreign_write_noop = perm.permission.is_cell()
-                    || (perm.permission.is_disabled() && (!protected || !perm.accessed))
-                    || (perm.permission == Permission::new_reserved_im() && !protected);
-                if relatedness.is_foreign()
-                    && foreign_write_noop
-                    && matches!(
-                        perm.skip_if_known_noop(access_kind, relatedness),
-                        ContinueTraversal::SkipSelfAndChildren
-                    )
-                {
-                    return Ok(());
-                }
-
                 // We know the exact relatedness, so we can actually do precise checks.
                 perm.perform_transition(
                     args.idx,

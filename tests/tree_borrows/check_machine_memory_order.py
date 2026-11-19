@@ -17,7 +17,7 @@ from pathlib import Path
 EXPECTED_MACHINE = "b1f816c92e6f99e47a73c774dcf043d89bb0d909"
 EXPECTED_TRACKER = "65660956220eac0d8270b273ac1074454f1c6f75"
 EXPECTED_TREE_MOD = "bf38ca356df45e5f365c0ae64bfe7738a0d43e1e"
-EXPECTED_TREE_RS = "b4611f85d10bc02b139c025cc83377682c77ea13"
+EXPECTED_TREE_RS = "b58a7cfeba92ece2dab1977f65f9070fd8cd71ad"
 ORDER = "diagnostic>data-race>tree-borrows>sync>delete-or-free"
 
 

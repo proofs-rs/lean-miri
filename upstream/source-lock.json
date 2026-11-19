@@ -756,9 +756,9 @@
     },
     {
       "component": "miri",
-      "git_blob": "b4611f85d10bc02b139c025cc83377682c77ea13",
+      "git_blob": "b58a7cfeba92ece2dab1977f65f9070fd8cd71ad",
       "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-      "sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57"
+      "sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2"
     },
     {
       "component": "miri",

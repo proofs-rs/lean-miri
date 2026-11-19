@@ -1327,19 +1327,19 @@
         {
           "line": 132,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationState::perform_access"
         },
         {
           "line": 139,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "Permission::perform_access"
         },
         {
           "line": 140,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "TransitionError::ChildAccessForbidden"
         }
       ],
@@ -1369,19 +1369,19 @@
         {
           "line": 64,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationState::new_non_accessed"
         },
         {
           "line": 73,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationState::new_accessed"
         },
         {
           "line": 78,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationState::possible"
         }
       ],
@@ -1409,13 +1409,13 @@
         {
           "line": 182,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationState::skip_if_known_noop"
         },
         {
           "line": 240,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationState::record_new_access"
         }
       ],
@@ -1445,7 +1445,7 @@
         {
           "line": 991,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "Tree::perform_normal_access"
         },
         {
@@ -1681,25 +1681,25 @@
         {
           "line": 623,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "Tree::perform_access"
         },
         {
           "line": 913,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationTree::perform_access"
         },
         {
           "line": 991,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationTree::perform_normal_access"
         },
         {
           "line": 95,
           "path": "upstream/miri-source/src/borrow_tracker/tree_borrows/tree.rs",
-          "source_sha256": "9cd95917081bfc5b64ebd4bca3b9d7f32e39f16ae67a06911ab2eeea147e5e57",
+          "source_sha256": "55b5a5d27ea4f0b1b8d43314f74cb31dae93eada7a78f3dc90f799f7141367a2",
           "symbol": "LocationState::perform_transition"
         },
         {

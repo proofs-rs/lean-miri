@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-EXPECTED_TREE = "b4611f85d10bc02b139c025cc83377682c77ea13"
+EXPECTED_TREE = "b58a7cfeba92ece2dab1977f65f9070fd8cd71ad"
 EXPECTED_RANGE_MAP = "56e9883b1caaf65a3f769cd5c91fbdbb81547f1b"
 EXPECTED_TREE_BORROWS_MOD = "bf38ca356df45e5f365c0ae64bfe7738a0d43e1e"
 
