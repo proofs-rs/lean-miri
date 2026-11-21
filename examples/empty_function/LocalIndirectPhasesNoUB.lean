@@ -139,7 +139,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
       rcases total with first | ⟨reason,failed⟩
       · have firstRaw := first
         rw [←entrySame] at firstRaw
-        obtain ⟨remaining,capacity,validation,successor⟩ := BodyTotal.of_success s metadata profile frames frame changed
+        obtain ⟨remaining,capacity,successor⟩ := BodyTotal.of_success s metadata profile frames frame changed
           identity body function location noClocks noGhost shallow _ firstRaw
         let middleFrame : LocalUnit.F := {BodyStep.withUnit frame .uninit (some s.abi.ret.layout) with location := .mir ⟨0,1⟩}
         let middle := LocalUnit.current frames middleFrame changed
@@ -187,7 +187,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
             have value : ({destination.slot with layout := some destination.baseLayout} : LocalState Provenance LocalLayout).value = .live (.indirect memory) := by
               rw [destination.live,indirect]
             have representation := destination.oldRepresentation memory indirect
-            apply OrdinaryCopyNoUB.old_indirect_outcome s metadata profile remaining capacity validation entry.older caller
+            apply OrdinaryCopyNoUB.old_indirect_outcome s metadata profile remaining capacity entry.older caller
               middleFrame popped destination.localId {destination.slot with layout := some destination.baseLayout} memory
               slotAt value (by rw [layout]) representation.1 representation.2 callerNoClocks noGhostPop shallowPop
             simpa only [offset] using returnPlace
@@ -204,7 +204,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
                   (LocalUnit.current frames protectedFrame changed) (LocalUnit.current entry.older caller popped)
                   addresses infos lives]
                 exact queries entry borrow changed actual amount offset zero
-            exact Or.inr ⟨caller,popped,ReturnGeometry.copy_of_query s metadata profile remaining capacity validation p
+            exact Or.inr ⟨caller,popped,ReturnGeometry.copy_of_query s metadata profile remaining capacity p
               input.tracker destination amount offset memory indirect entry.older caller middleFrame popped slotAt callerNoClocks
               noGhostPop shallowPop (by simpa only [offset] using returnPlace) query⟩
         obtain ⟨unwind,continuation⟩ : ∃ unwind, middleFrame.returnContinuation = .goto (some p.returnBlock) unwind := by

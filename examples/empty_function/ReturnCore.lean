@@ -6,7 +6,7 @@ set_option autoImplicit false
 set_option maxRecDepth 65536
 set_option maxHeartbeats 4000000
 theorem core (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array LocalUnit.F) (caller frame : LocalUnit.F)
     (before after : MachineHooks.MachineState MiriMemoryKind RootUser)
     (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)

@@ -171,8 +171,6 @@ structure ResourceMargins (s : Static) (p : Packet)
   capacity : budget ≤ s.capacity
   dispatch : budget ≤ s.limits.callDispatch
   retag : budget ≤ s.limits.retag
-  validation : budget ≤ s.limits.validation
-  configuredValidation : budget ≤ s.options.limits.validation
   configuredRetag : budget ≤ s.options.limits.retag
   dynamic : budget ≤ s.options.place.dynamicFuel
   tagRoom : ∀ tracker, p.before.machine.borrowTracker = some tracker →

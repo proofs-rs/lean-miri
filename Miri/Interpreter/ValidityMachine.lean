@@ -305,20 +305,20 @@ Mode No is handled by enforceValidity at the source caller. Explicit direct
 validatePlace requests still validate, as the interpreter source does. -/
 def validateRuntime [DecidableEq K]
     (h : ValidityVisitor.Hooks Provenance (State K User) C MachineHooks.FrameExtra F A Pad)
-    (choice : C) (budget : Nat) (place : RuntimePlace Provenance) (reset : Bool) : M K User Unit := do
-  ValidityVisitor.validatePlace h choice budget place (← enforceValidityRecursively) reset
+    (choice : C) (place : RuntimePlace Provenance) (reset : Bool) : M K User Unit := do
+  ValidityVisitor.validatePlace h choice place (← enforceValidityRecursively) reset
 
 def bindValidation [DecidableEq K]
     (compiler : Compiler K User C) (copy : PlaceCopyHooks Provenance (State K User) C)
-    (h : ValidityVisitor.Hooks Provenance (State K User) C MachineHooks.FrameExtra F A Pad)
-    (budget : Nat) : Compiler K User C × PlaceCopyHooks Provenance (State K User) C :=
+    (h : ValidityVisitor.Hooks Provenance (State K User) C MachineHooks.FrameExtra F A Pad) :
+    Compiler K User C × PlaceCopyHooks Provenance (State K User) C :=
   let compiler := compilerPolicy compiler
-  ({compiler with validate := fun c place => validateRuntime h c budget place true},
+  ({compiler with validate := fun c place => validateRuntime h c place true},
    {copy with validateSource := fun c source destination => do
     if !source.layout.isSized || !destination.layout.layout.isSized || source.layout.size != destination.layout.layout.size then
       throw (.invalidProgram "source validation transmute requires equally sized layouts")
     let sourcePlace ← PlaceDynamic.offsetWithMeta h.projection c destination .ZERO .wrapping .none source
-    validateRuntime h c budget sourcePlace true })
+    validateRuntime h c sourcePlace true })
 
 /-- Stateful default rvalue binding. Every place memory write samples the
 current ghost/validation flags; reference/raw-pointer retag triggers and modes

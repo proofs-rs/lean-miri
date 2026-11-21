@@ -53,16 +53,13 @@ def finishedMachine (s : Static) (p : Packet) (frame previous : LocalUnit.F)
   have budget : 64 ≤ resources.budget := by have bound := resources.reserve; unfold work at bound; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 :=
     ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by
-    have bound := resources.configuredValidation
-    omega
   obtain ⟨entryFrame,machine,tree,installed,body,identity,function,location,locals,tracked,noClocks,returnPlace,
     continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,released,rights⟩ :=
       ConcreteInit.init_live s metadata profile metadata.pointerSize p runtime input resources destination id tag encoding entry live
   have entrySame : BodyStep.withUnit entryFrame .uninit none = entryFrame := by
     change {entryFrame with locals := #[{value := .live (.immediate .uninit),layout := none}]} = entryFrame
     rw [←locals]
-  have bodyStep := BodyAssignment.step s metadata profile remaining capacity validation p.before.stack.frames entryFrame
+  have bodyStep := BodyAssignment.step s metadata profile remaining capacity p.before.stack.frames entryFrame
     machine identity body function location noClocks noGhost shallow
   rw [entrySame] at bodyStep
   let next := {(BodyStep.withUnit entryFrame .uninit (some s.abi.ret.layout)) with location := .mir ⟨0,1⟩}
@@ -166,7 +163,6 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
   have positive : 0 < s.capacity := by have bound := resources.capacity; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 :=
     ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   obtain ⟨installed,frame,machine,tree,installEq,depthEq,first,body,identity,function,location,locals,frameTracked,
     noClocks,returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,released,rights⟩ :=
       init_body s metadata profile p runtime input resources destination id tag encoding entry live
@@ -230,7 +226,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
     rw [continuation]
     unfold CanonicalInit.normalizedContinuation
     split <;> exact ⟨_,rfl⟩
-  have returned := ReturnSingleton.core_from_pop s metadata profile remaining capacity validation older input.caller
+  have returned := ReturnSingleton.core_from_pop s metadata profile remaining capacity older input.caller
     frame post finalMachine body location locals noClocks popped destination.place
     (returnPlace.trans destination.encoding) destination.layout destination.sizedMetadata destination.alignmentCache
     p.returnBlock unwind normalCont varargs ghostPost shallowPost

@@ -46,11 +46,8 @@ theorem step (s : Static) (metadata : Metadata s) (profile : Profile s)
   · exact Or.inr ⟨_,BodyFailures.step_capacity_one s metadata profile one frames frame machine
       bodyIdentity body function location noClocks noGhost shallow⟩
   · have capacity : s.capacity = (s.capacity-2)+2 := by omega
-    by_cases zero : s.options.limits.validation = 0
-    · exact Or.inr ⟨_,BodyFailures.step_validation_zero s metadata profile (s.capacity-2) capacity zero
-        frames frame machine bodyIdentity body function location noClocks noGhost shallow⟩
-    · exact Or.inl (BodyAssignment.step s metadata profile (s.capacity-2) capacity (by omega)
-        frames frame machine bodyIdentity body function location noClocks noGhost shallow)
+    exact Or.inl (BodyAssignment.step s metadata profile (s.capacity-2) capacity
+      frames frame machine bodyIdentity body function location noClocks noGhost shallow)
 
 theorem of_success (s : Static) (metadata : Metadata s) (profile : Profile s)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
@@ -65,7 +62,7 @@ theorem of_success (s : Static) (metadata : Metadata s) (profile : Profile s)
     (after : State)
     (actual : ExecutionMachine.step s.cfg s.limits ()
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) = (after,.ok true)) :
-    ∃ remaining, s.capacity = remaining+2 ∧ 0 < s.options.limits.validation ∧
+    ∃ remaining, s.capacity = remaining+2 ∧
       after = BodyStep.current frames {(BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) with
         location := .mir ⟨0,1⟩} machine := by
   have positive := capacity_positive s
@@ -76,17 +73,10 @@ theorem of_success (s : Static) (metadata : Metadata s) (profile : Profile s)
     rw [actual] at failure
     cases failure
   have capacity : s.capacity = (s.capacity-2)+2 := by omega
-  have validation : 0 < s.options.limits.validation := by
-    by_cases zero : s.options.limits.validation = 0
-    · have failure := BodyFailures.step_validation_zero s metadata profile (s.capacity-2) capacity zero
-        frames frame machine bodyIdentity body function location noClocks noGhost shallow
-      rw [actual] at failure
-      cases failure
-    · omega
-  have exactStep := BodyAssignment.step s metadata profile (s.capacity-2) capacity validation
+  have exactStep := BodyAssignment.step s metadata profile (s.capacity-2) capacity
     frames frame machine bodyIdentity body function location noClocks noGhost shallow
   rw [actual] at exactStep
-  exact ⟨s.capacity-2,capacity,validation,congrArg Prod.fst exactStep⟩
+  exact ⟨s.capacity-2,capacity,congrArg Prod.fst exactStep⟩
 
 open Lean Elab Command in
 run_cmd do

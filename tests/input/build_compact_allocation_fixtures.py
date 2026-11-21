@@ -75,7 +75,7 @@ def body_tls(declaration):
 def write(name, doc):
     if isinstance(doc, dict) and doc.get("schema") == "lean-miri-rustc-mir":
         version = doc["schema_version"]
-        doc["schema_version"] = 16
+        doc["schema_version"] = 17
         doc = pool_document(doc)
         if version != 16:
             doc["schema_version"] = version

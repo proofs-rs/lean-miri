@@ -440,6 +440,7 @@ structure SourceTypeLayout where
 
 structure TypeNode where
   id : TypeId
+  validationRank : Nat := 0
   sourceLayout : SourceTypeLayout := {normalizedType := id}
   display : String
   shape : TypeShape

@@ -463,7 +463,7 @@ def makeWithForeignContext {Assembly : Type}
     let validate := fun c place => do
       match nested () with
       | .error error => throw error
-      | .ok config => ValidityMachine.validateRuntime config.validity c options.limits.validation place true
+      | .ok config => ValidityMachine.validateRuntime config.validity c place true
     let compiler := EvalPlaceConstruction.compiler p placeOptions access pointers table
       (CompilerPlaceTypes.place p options.place.debugAssertions covariance) validate
     let projection := EvalPlaceConstruction.projection p placeOptions access allocation compiler table
@@ -508,14 +508,14 @@ def makeWithForeignContext {Assembly : Type}
       (CompilerValidityLeaves.make p image EvalProjectionMachine.arrays projection pointers)
       access allocation compiler projection (FunctionPointerConsumers.vtable functions table) discr pointers retag options.limits.retag
     let copy := CompilerCopy.hooks p.runtime options.place.debugAssertions compatibility access
-      PointerMachine.User.addresses pointers.arithmetic validity options.limits.validation
+      PointerMachine.User.addresses pointers.arithmetic validity
     let castQueries := CompilerCastLeaves.make p (CompilerCastQueries.required p) table
       (fun _ provenance => PointerMachine.exposeProvenance pointers provenance)
       (fun _ address => PointerMachine.pointerFromExposedAddress pointers address)
       (fun value layout => EvalProjectionMachine.assertAbi p.runtime.target value layout |>.mapError IntrinsicVectorMachine.projectionError)
     let casts := ExecutionCast.hooks castQueries access allocation compiler projection copy retag validity functions floats
       dereference (OperandMachine.field operands) (fun _ _ => ValidityMachine.enforceValidityRecursively)
-      options.limits.retag options.limits.validation
+      options.limits.retag
     let nativeDrop := nativeBacking.map fun backing => NativeAllocationLifecycle.releaseAllocation
       (NativeAllocationLifecycle.liftBacking backing)
     -- FreedAlloc (machine.rs1801) is the same display-only diagnostic.
@@ -645,7 +645,7 @@ def makeWithForeignContext {Assembly : Type}
         (fun c value => do let place ← PointerPlaceMachine.fromImmediate access pointerCompiler c value; pure ⟨.indirect place.mplace,place.layout⟩)
         scalar floats (Discriminant.readDiscriminant discr) (Discriminant.discriminantForVariant discr)
         (Unwind.handleCatchUnwind unwind) returnToBlock access allocation extra deallocateStack compiler projection.place copy pointers
-        projection.dynamic projection.dynamicFuel validity options.limits.validation
+        projection.dynamic projection.dynamicFuel validity
       {core with mathHooks := some math}
     let llvm := fun callee => query (EvalArchitectureMachine.compilerDispatcher context p.intrinsics pointers
       leaves.checkLlvmSymbolClash math access projection (intrinsics callee).simdHooks (fun name os => .unsupported s!"unsupported foreign item {name} on {os}"))
@@ -1032,7 +1032,7 @@ def makeFromSourcePackage [DecidableEq Os]
             EvalNativeSourceConstruction.call
               sourceLeaves.hostConfiguration.hostUsizeBits nativeLifecycleBacking p
               EvalProjectionMachine.arrays sourceLeaves.nativeBackend context.validityAccess
-              context.pointers context.validity options.limits.validation
+              context.pointers context.validity
               options.limits.callDispatch context.choice options.compatibilityBudget name
               (RuntimePlace.mk (.memory destination.mplace) destination.layout) args)
           context.validityAccess context.access context.allocation context.compiler

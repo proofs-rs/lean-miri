@@ -15,7 +15,7 @@ set_option linter.unusedSimpArgs false
 
  theorem init_body (s : Static) (metadata : Metadata s) (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (validation : 0 < s.options.limits.validation) (destination : InputDraft.LocalDestination s p input.tracker)
+    (remaining : Nat) (capacity : s.capacity = remaining+2) (destination : InputDraft.LocalDestination s p input.tracker)
     (whole : destination.offset = none) (value : Immediate Provenance)
     (immediate : destination.oldOperand = .immediate value) :
     ∃ (older : Array LocalUnit.F) (bound : destination.localId < destination.caller.locals.size)
@@ -39,7 +39,7 @@ set_option linter.unusedSimpArgs false
   have entrySame : BodyStep.withUnit entry .uninit none = entry := by
     change {entry with locals := #[{value := .live (.immediate .uninit),layout := none}]} = entry
     rw [←locals]
-  have first := BodyAssignment.step s metadata profile remaining capacity validation frames entry machine
+  have first := BodyAssignment.step s metadata profile remaining capacity frames entry machine
     identity body function location noClocks noGhost shallow
   rw [entrySame] at first
   let next : LocalUnit.F := {(BodyStep.withUnit entry .uninit (some s.abi.ret.layout)) with location := .mir ⟨0,1⟩}
@@ -124,7 +124,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
 
  theorem run_operations (s : Static) (metadata : Metadata s) (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (validation : 0 < s.options.limits.validation) (destination : InputDraft.LocalDestination s p input.tracker)
+    (remaining : Nat) (capacity : s.capacity = remaining+2) (destination : InputDraft.LocalDestination s p input.tracker)
     (whole : destination.offset = none) (value : Immediate Provenance)
     (immediate : destination.oldOperand = .immediate value) :
     ∃ (installed finish : State) (older : Array LocalUnit.F)
@@ -138,7 +138,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
   have positive := InitializationPrefix.capacity_positive s
   obtain ⟨older,bound,installed,frame,machine,original,installEq,depthEq,first,body,identity,function,location,
     locals,frameTracked,noClocks,returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,tracked⟩ :=
-      init_body s metadata profile p runtime input remaining capacity validation destination whole value immediate
+      init_body s metadata profile p runtime input remaining capacity destination whole value immediate
   let caller := LocalModel.caller s p input.tracker destination bound
   let frames := older.push caller
   have controlEq : machine.user.payload.payload.user.host.control =
@@ -182,7 +182,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
     split <;> exact ⟨_,rfl⟩
   let finalMachine := FrameExit.afterRelevanceAt frames frame post (thread.topUserRelevantFrame.getD frames.size)
   let finish := ReturnContinuation.resume older caller finalMachine p.returnBlock
-  have returned := LocalReturn.core s metadata profile remaining capacity validation older caller frame post body location
+  have returned := LocalReturn.core s metadata profile remaining capacity older caller frame post body location
     locals noClocks frameTracked input.tracker trackedPost thread activePost destination.localId _ atSlot live rfl
     callerNoClocks returnedPlace p.returnBlock unwind normalCont varargs ghostPost shallowPost
   have second := ReturnStep.compose s metadata frames frame machine post finish body location hookEq returned
@@ -203,7 +203,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
   simp only [finish,finalMachine,post,LocalModel.finish,LocalModel.machine,machineEq,frames,caller]
 /-- Resource-independent UB freedom for the original whole-local immediate
 caller family. Errors during the body retain their actual failed states; the
-successful branch obtains its capacity/validation facts from actual success. -/
+successful branch obtains its construction capacity from actual success. -/
 theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (destination : InputDraft.LocalDestination s p input.tracker)
@@ -223,11 +223,11 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
   rcases total with succeeded | ⟨reason,failed⟩
   · have actual := succeeded
     rw [←entrySame] at actual
-    obtain ⟨remaining,capacity,validation,after⟩ := BodyTotal.of_success s metadata profile frames frame machine
+    obtain ⟨remaining,capacity,after⟩ := BodyTotal.of_success s metadata profile frames frame machine
       identity body function location noClocks noGhost shallow _ actual
     obtain ⟨normalInstalled,finish,normalOlder,normalBound,normalFrame,normalPrevious,index,
       normalOriginal,normalInitialized,depthEq,execution,returned,safe,normalNoUB,finishEq⟩ :=
-      run_operations s metadata profile p runtime input remaining capacity validation destination whole value immediate
+      run_operations s metadata profile p runtime input remaining capacity destination whole value immediate
     apply (CallLevelNoUB.noUB_iff_initialization_and_scoped s p).mpr
     constructor
     · intro error failedState outcome

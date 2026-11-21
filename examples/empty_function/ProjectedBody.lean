@@ -45,7 +45,6 @@ set_option linter.unusedSimpArgs false
       machine.borrowTracker = p.before.machine.borrowTracker := by
   have budget : 64 ≤ resources.budget := by have bound := resources.reserve; unfold work at bound; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 := ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   obtain ⟨older,bound,entry,machine,original,installed,body,identity,function,location,locals,tracked,noClocks,
     returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,machineTracked⟩ :=
       ProjectedInit.uninit s metadata profile p runtime input resources destination offset projected immediate
@@ -53,7 +52,7 @@ set_option linter.unusedSimpArgs false
   have entrySame : BodyStep.withUnit entry .uninit none = entry := by
     change {entry with locals := #[{value := .live (.immediate .uninit),layout := none}]} = entry
     rw [←locals]
-  have first := BodyAssignment.step s metadata profile remaining capacity validation frames entry machine
+  have first := BodyAssignment.step s metadata profile remaining capacity frames entry machine
     identity body function location noClocks noGhost shallow
   rw [entrySame] at first
   let next : LocalUnit.F := {(BodyStep.withUnit entry .uninit (some s.abi.ret.layout)) with location := .mir ⟨0,1⟩}

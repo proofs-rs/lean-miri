@@ -28,7 +28,7 @@ Even for expected UB, the harness itself exits 0 when its assertions hold.
 Unsupported, failure and fuel exhaustion cannot replace expected UB.
 The large TB case checks the final write to a Frozen tag after a parent read.
 
-The active replay inputs are the separately pinned schema-16 cohort in
+The active replay inputs are the separately pinned schema-17 cohort in
 [fixtures/current](fixtures/current/README.md). Its byte-bound references and
 reviewed seed/typed-prefix migration retain the same terminal, UB and ordering
 contracts. Historical inputs in the parent fixture directory remain unchanged.

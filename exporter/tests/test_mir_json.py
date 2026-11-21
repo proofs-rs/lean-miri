@@ -12,7 +12,7 @@ from mir_json import MirJSONError, POOL_NAMES, decode_mir_document, load_mir_doc
 
 
 def document(**fields):
-    value = {"schema": "lean-miri-rustc-mir", "schema_version": 16,
+    value = {"schema": "lean-miri-rustc-mir", "schema_version": 17,
              **{name: [] for name in POOL_NAMES}, **{name: [] for name in SHARED_POOLS},
              "files": [], "byte_images": [], "source_trait_material": {},
              "source_vtables": {}, "source_abi": {}, "source_cast_targets": [],
@@ -65,20 +65,20 @@ class MirJSONTests(unittest.TestCase):
                     decode_mir_document(document(**{name: value}))
 
     def test_requires_current_schema_version(self):
-        for version in (4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, True, "16", 16.0):
-            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 16"):
+        for version in (4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, True, "17", 17.0):
+            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 17"):
                 decode_mir_document(document(schema_version=version))
 
     def test_current_schema_requires_exact_coroutine_catalog_and_preserves_version(self):
         catalog = {"body_coroutines": [], "coroutines": [], "auxiliary_bodies": []}
-        current = document(schema_version=16, compiler_coroutine_coverage=catalog)
+        current = document(schema_version=17, compiler_coroutine_coverage=catalog)
         self.assertIs(decode_mir_document(current), current)
-        self.assertEqual(expand_document(current)["schema_version"], 16)
+        self.assertEqual(expand_document(current)["schema_version"], 17)
         for invalid in (None, {}, {**catalog, "unknown_witness": True},
                         {**catalog, "body_coroutines": [False]},
                         {**catalog, "body_coroutines": [0]}):
             with self.subTest(catalog=invalid), self.assertRaises(MirJSONError):
-                decode_mir_document(document(schema_version=16, compiler_coroutine_coverage=invalid))
+                decode_mir_document(document(schema_version=17, compiler_coroutine_coverage=invalid))
         with self.assertRaises(MirJSONError):
             missing = document()
             del missing["compiler_coroutine_coverage"]
@@ -99,7 +99,7 @@ class MirJSONTests(unittest.TestCase):
                               "storage_conflicts": [[]]},
                    "drop_sync": None, "drop_async": 0, "drop_proxy_async": None}
         catalog = {"body_coroutines": [True], "coroutines": [witness], "auxiliary_bodies": [auxiliary]}
-        current = document(schema_version=16, bodies=[body], types=[{}], instances=[{}], definitions=[{}], spans=[{}],
+        current = document(schema_version=17, bodies=[body], types=[{}], instances=[{}], definitions=[{}], spans=[{}],
                            source_infos=[{"span": 0, "scope": 0}], compiler_coroutine_coverage=catalog)
         self.assertIs(decode_mir_document(current), current)
         expanded = expand_document(current)

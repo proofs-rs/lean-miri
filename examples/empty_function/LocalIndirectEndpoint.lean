@@ -110,7 +110,6 @@ theorem run_operations (s : Static) (metadata : Metadata s) (profile : Profile s
   have positive : 0 < s.capacity := by have bound := resources.capacity; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 :=
     ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   obtain ⟨older,bound,original,⟨entry⟩⟩ := LocalIndirectInit.install_whole s metadata profile p runtime input resources destination whole place indirect resident
   let caller := LocalModel.caller s p input.tracker destination bound
   let frames := older.push caller
@@ -118,7 +117,7 @@ theorem run_operations (s : Static) (metadata : Metadata s) (profile : Profile s
   have entrySame : BodyStep.withUnit entry.frame .uninit none = entry.frame := by
     change {entry.frame with locals := #[{value := .live (.immediate .uninit),layout := none}]} = entry.frame
     rw [←entry.locals]
-  have first := BodyAssignment.step s metadata profile remaining capacity validation frames
+  have first := BodyAssignment.step s metadata profile remaining capacity frames
     entry.frame entry.machine entry.identity entry.body entry.function entry.location entry.noClocks entry.ghost entry.shallow
   rw [entrySame] at first
   let installed := LocalUnit.current frames entry.frame entry.machine
@@ -223,7 +222,7 @@ theorem run_operations (s : Static) (metadata : Metadata s) (profile : Profile s
     split <;> exact ⟨_,rfl⟩
   have cachedAt := LocalImmediate.cached_at destination.caller destination.localId destination.slot s.abi.ret.layout bound
   have oldLive : destination.slot.value = .live (.indirect place) := by rw [destination.live,indirect]
-  have copyEq := LocalIndirectReturn.copy s metadata profile remaining capacity validation older caller finalMachine
+  have copyEq := LocalIndirectReturn.copy s metadata profile remaining capacity older caller finalMachine
     destination.localId {destination.slot with layout := some s.abi.ret.layout} place cachedAt oldLive rfl
     (destination.oldRepresentation place indirect).1 (destination.oldRepresentation place indirect).2
     (show caller.extra.dataRace = none from by
@@ -234,7 +233,7 @@ theorem run_operations (s : Static) (metadata : Metadata s) (profile : Profile s
     rw [returnPlace,destination.encoding,whole,original]
     simp [caller,LocalModel.caller,LocalImmediate.cached]
   rw [←returning] at copyEq
-  have returned := ReturnCore.core s metadata profile remaining capacity validation older caller frame post finalMachine
+  have returned := ReturnCore.core s metadata profile remaining capacity older caller frame post finalMachine
     body location locals noClocks popped copyEq p.returnBlock unwind normalCont varargs ghostPost shallowPost
   have returnEq : (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false
       (LocalUnit.current frames frame post) = (finish,.ok ()) := by

@@ -75,7 +75,7 @@ theorem destination_query (s : Static) (metadata : Metadata s)
 /-- Internal actual inbounds-query composition, discharged by destination_query
 or its metadata-snapshot transport below. -/
 theorem copy_of_query (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (validation : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (p : Packet) (tracker : MachineHooks.BorrowState) (destination : InputDraft.LocalDestination s p tracker)
     (amount : Size) (projected : destination.offset = some amount)
     (memory : MemPlace Provenance) (indirect : destination.oldOperand = .indirect memory)
@@ -102,14 +102,14 @@ theorem copy_of_query (s : Static) (metadata : Metadata s) (profile : Profile s)
       .live (.indirect memory) := by rw [destination.live,indirect]
   have representation := destination.oldRepresentation memory indirect
   rw [returnPlace]
-  exact ProjectedIndirectCopy.control_copy s metadata profile remaining capacity validation older caller machine
+  exact ProjectedIndirectCopy.control_copy s metadata profile remaining capacity older caller machine
     destination.localId {destination.slot with layout := some destination.baseLayout} destination.baseLayout memory amount
     slotAt value rfl noClocks representation.2 noGhost shallow activeQuery
 
 /-- The complete copy wrapper derives its query from original raw footprint;
 positive offsets alone require geometry preservation. -/
 theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (validation : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (p : Packet) (tracker : MachineHooks.BorrowState) (destination : InputDraft.LocalDestination s p tracker)
     (amount : Size) (projected : destination.offset = some amount)
     (memory : MemPlace Provenance) (indirect : destination.oldOperand = .indirect memory)
@@ -128,11 +128,11 @@ theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
       (LocalUnit.current older caller machine) = (LocalUnit.current older caller machine,.ok ()) := by
   have query := destination_query s metadata p tracker destination amount projected memory indirect
     (LocalUnit.current older caller machine) posts
-  exact copy_of_query s metadata profile remaining capacity validation p tracker destination amount projected
+  exact copy_of_query s metadata profile remaining capacity p tracker destination amount projected
     memory indirect older caller callee machine slotAt noClocks noGhost shallow returnPlace query
 
  theorem copy_outcome (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (validation : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (p : Packet) (tracker : MachineHooks.BorrowState) (destination : InputDraft.LocalDestination s p tracker)
     (amount : Size) (projected : destination.offset = some amount)
     (memory : MemPlace Provenance) (indirect : destination.oldOperand = .indirect memory)
@@ -148,11 +148,11 @@ theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
       Preservation.ExistingAddressFacts p.before (LocalUnit.current older caller machine) ∧
       FootprintAfter.Geometry p.before (LocalUnit.current older caller machine)) :
     OrdinaryReturnNoUB.CopyOutcome s older caller callee machine := by
-  exact Or.inr ⟨caller,machine,copy s metadata profile remaining capacity validation p tracker destination amount projected
+  exact Or.inr ⟨caller,machine,copy s metadata profile remaining capacity p tracker destination amount projected
     memory indirect older caller callee machine slotAt noClocks noGhost shallow returnPlace posts⟩
 
 theorem outcome_after_snapshot (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (validation : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (p : Packet) (tracker : MachineHooks.BorrowState) (destination : InputDraft.LocalDestination s p tracker)
     (amount : Size) (projected : destination.offset = some amount)
     (memory : MemPlace Provenance) (indirect : destination.oldOperand = .indirect memory)
@@ -176,7 +176,7 @@ theorem outcome_after_snapshot (s : Static) (metadata : Metadata s) (profile : P
     rw [ProjectionSnapshot.offset_congr (ConcreteProtection.source s).pointers geometryAt
       (LocalUnit.current older caller machine) addresses info live]
     exact destination_query s metadata p tracker destination amount projected memory indirect geometryAt posts
-  exact Or.inr ⟨caller,machine,copy_of_query s metadata profile remaining capacity validation p tracker destination
+  exact Or.inr ⟨caller,machine,copy_of_query s metadata profile remaining capacity p tracker destination
     amount projected memory indirect older caller callee machine slotAt noClocks noGhost shallow returnPlace query⟩
 
 open Lean Elab Command in

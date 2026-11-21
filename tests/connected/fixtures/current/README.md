@@ -1,6 +1,6 @@
 # Current connected replay cohort
 
-These schema-16 inputs are new compiler exports from the unchanged Rust sources
+These schema-17 inputs are new compiler exports from the unchanged Rust sources
 in the parent directory. The parent snapshots, sidecars and typed tapes remain
 historical artifacts, byte for byte. The active cohort is pinned by
 `manifest.json` and `SHA256SUMS`; every stored input has a new same-prepared-TyCtxt

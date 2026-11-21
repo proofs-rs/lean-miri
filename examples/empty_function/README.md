@@ -55,7 +55,7 @@ source-material format.
 
 Miri source additions expose proof-only APIs; the interpreter implementation
 is unchanged by this example. The fixed Rust/input hashes are recorded in
-`SHA256SUMS`. The schema-16 input contains the concrete body, evaluated constants
+`SHA256SUMS`. The schema-17 input contains the concrete body, evaluated constants
 and finite type/declaration, ABI and allocation-identity material. It contains no
 layout or FnAbi answer tables; the production Lean providers compute those values.
 Generic function MIR is absent. Metadata premises remain explicit pure-query

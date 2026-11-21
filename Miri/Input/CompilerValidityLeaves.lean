@@ -25,7 +25,8 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
   let context := facts.context
   let constructed := fun ty => do
     return (arrays.get (← get)).entries.any (·.value.ty == ty)
-  { classify := fun _ ty => do
+  { typeRank := fun state => RuntimeArrayTypes.typeRank (arrays.get state)
+    classify := fun _ ty => do
       if ← constructed ty then
         let (_,element) ← match RuntimeArrayTypes.arrayInfo (arrays.get (← get)) ty with
           | .ok value => pure value

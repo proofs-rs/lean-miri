@@ -10,7 +10,7 @@ CURRENT = HISTORICAL / 'current'
 
 def load_cohort():
     manifest = json.loads((CURRENT / 'manifest.json').read_text())
-    if manifest['schema'] != 'lean-miri-connected-cohort-v1' or manifest['schema_version'] != 16:
+    if manifest['schema'] != 'lean-miri-connected-cohort-v1' or manifest['schema_version'] != 17:
         raise ValueError('unsupported connected replay cohort')
     for name in ('rustc', 'miri'):
         if manifest[f'{name}_commit'] != (ROOT / f'upstream/.pins/{name}.commit').read_text().strip():

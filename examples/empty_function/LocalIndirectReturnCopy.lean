@@ -157,7 +157,7 @@ theorem write_as_memory [DecidableEq K] (access : ValidityMachine.Access K U)
   exact Except.ok.inj law
 
 theorem shallow_indirect
-    (h : BodyDictionaries.Visitor) (fuel : Nat) (state : WholeCall.State)
+    (h : BodyDictionaries.Visitor) (state : WholeCall.State)
     (reference : RuntimePlaceRef Provenance) (place : MPlaceTy Provenance) (name : String)
     (noGhost : state.machine.user.payload.ghost = false)
     (ghost : @h.withGhostValidation = @ValidityMachine.withGhostValidation MiriMemoryKind CanonicalDictionaries.Stored)
@@ -175,9 +175,9 @@ theorem shallow_indirect
     (padding : h.beginPadding () place Size.ZERO (BodyValidation.active state) = .ok none (BodyValidation.active state))
     (fields : place.layout.layout.fields = .Arbitrary #[] #[])
     (variants : place.layout.layout.variants = .Single 0) (debugOff : h.debugAssertions = false) :
-    ValidityVisitor.validatePlace h () (fuel+1) ⟨reference,place.layout⟩ false true state = .ok () state := by
+    ValidityVisitor.validatePlace h () ⟨reference,place.layout⟩ false true state = .ok () state := by
   let session := {BodyValidation.session name with dataBytes := some .empty}
-  have visited := ValidityVisitor.visit_fieldless h () fuel session ⟨reference,place.layout⟩
+  have visited := ValidityVisitor.visit_fieldless h () (h.typeRank (BodyValidation.active state)) session ⟨reference,place.layout⟩
     (BodyValidation.active state) 0 classify inhabited fields variants rfl debugOff
   have reset := ValidityVisitor.resetPadding_forced_zero h () session ⟨reference,place.layout⟩ place
     (BodyValidation.active state) rfl forced size dynamic padding
@@ -185,7 +185,7 @@ theorem shallow_indirect
   simp only [ghost,bind,Bind.bind,EStateM.bind,nameQuery,ValidityMachine.withGhostValidation,
     noGhost,Bool.false_eq_true,↓reduceIte]
   simp only [BodyValidation.active,session,BodyValidation.session] at readQuery visited reset
-  simp only [readQuery,pure,Pure.pure,EStateM.pure,visited,reset,bind,Bind.bind,EStateM.bind]
+  simp only [get,getThe,MonadStateOf.get,EStateM.get,readQuery,pure,Pure.pure,EStateM.pure,visited,reset,bind,Bind.bind,EStateM.bind]
   cases state
   simp_all
   rename_i stack machine
@@ -199,9 +199,8 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (place : MPlaceTy Provenance)
     (atSlot : frame.locals[id]? = some slot) (live : slot.value = .live (.indirect place.mplace))
     (cache : slot.layout = some place.layout) (noClocks : frame.extra.dataRace = none)
-    (layout : place.layout = s.abi.ret.layout) (noGhost : machine.user.payload.ghost = false)
-    (fuel : Nat) :
-    ValidityVisitor.validatePlace config.validity () (fuel+1) (destination frames frame id place.layout) false true (LocalUnit.current frames frame machine) =
+    (layout : place.layout = s.abi.ret.layout) (noGhost : machine.user.payload.ghost = false) :
+    ValidityVisitor.validatePlace config.validity () (destination frames frame id place.layout) false true (LocalUnit.current frames frame machine) =
       .ok () (LocalUnit.current frames frame machine) := by
   let state := LocalUnit.current frames frame machine
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
@@ -227,7 +226,7 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
     congrArg BodyDictionaries.Queries.debug methods
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
   have sized : place.layout.layout.isSized = true := by rw [layout]; exact metadata.unitSized
-  apply shallow_indirect config.validity fuel state (destination frames frame id place.layout).ref place node.display noGhost ghostEq
+  apply shallow_indirect config.validity state (destination frames frame id place.layout).ref place node.display noGhost ghostEq
   · rw [nameEq,layout]
     exact BodyQueries.adapter_name _ _ () _ _ node nodeFound
   · have read := read_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
@@ -257,7 +256,6 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
 
  theorem validate_unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (memory : MemPlace Provenance)
@@ -278,9 +276,7 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
   obtain ⟨inner, innerBuilt, _⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
     s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
-  have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
   have valid := canonical_unit s metadata profile remaining inner innerBuilt frames frame machine id slot ⟨memory,s.abi.ret.layout⟩ atSlot live cache noClocks rfl noGhost
-    (s.options.limits.validation-1)
   rw [fields.projection]
   simp only [ValidityMachine.placeHooks, ValidityMachine.compilerPolicy, PlaceMachine.placeHooks]
   rw [fields.validate]
@@ -289,7 +285,6 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
   simp only [ValidityMachine.enforceValidityRecursively, LocalUnit.current,
     get, getThe, MonadStateOf.get, EStateM.get, bind, Bind.bind, EStateM.bind,
     shallow, show (ValidityMachine.ValidationMode.Shallow == .Deep) = false from by decide, beq_self_eq_true, pure, Pure.pure, EStateM.pure]
-  rw [budget]
   simpa only [LocalUnit.current] using valid
 
 theorem write (s : Static) (metadata : Metadata s) (profile : Profile s)
@@ -315,7 +310,7 @@ theorem write (s : Static) (metadata : Metadata s) (profile : Profile s)
   exact physical
 
 theorem unit (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (frames : Array F) (frame : F) (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (memory : MemPlace Provenance)
     (atSlot : frame.locals[id]? = some slot) (live : slot.value = .live (.indirect memory))
@@ -346,7 +341,7 @@ theorem unit (s : Static) (metadata : Metadata s) (profile : Profile s)
       bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,metadata.unitSized,
       Bool.not_true,Bool.false_and,Bool.false_or,Bool.false_eq_true,↓reduceIte,bne_self_eq_false]
     exact written
-  have valid := validate_unit s metadata profile remaining capacity positive frames frame machine id slot memory
+  have valid := validate_unit s metadata profile remaining capacity frames frame machine id slot memory
     atSlot live cache noClocks noGhost shallow
   unfold copyRuntimePlace
   simp only [bind,Bind.bind,EStateM.bind]

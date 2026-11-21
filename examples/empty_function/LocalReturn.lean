@@ -21,7 +21,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure]
 
  theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array LocalUnit.F) (caller : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser) (id : MIR.LocalId)
     (slot : LocalState Provenance LocalLayout) (atSlot : caller.locals[id]? = some slot)
@@ -43,7 +43,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     simp [CompilerCopy.hasPadding,metadata.unitBackend,pure,Except.pure]
   have eq := bound_copy s s.abi.ret.layout (LocalReturnCopy.destination older caller id s.abi.ret.layout)
     rfl compatible padding metadata.unitSized
-  have safe := LocalReturnCopy.unit_allow s metadata profile true remaining capacity positive older caller machine
+  have safe := LocalReturnCopy.unit_allow s metadata profile true remaining capacity older caller machine
     id slot atSlot live cache noClocks noGhost shallow
   change MachineHooks.run (copyRuntimePlace _ _ () _ _ true) (LocalUnit.current older caller machine) = _
   simp only [RuntimeStackPlace.toRuntimePlace]
@@ -52,7 +52,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
   simp only [MachineHooks.run,Call.run,safe]
 
  theorem core (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array LocalUnit.F) (caller frame : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
@@ -82,7 +82,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     split <;> exact shallow
   have readEq := ReturnStep.read s metadata profile remaining capacity (older.push caller) frame machine locals noClocks
   have popEq := ReturnStep.pop s (older.push caller) frame machine tracker tracked frameTracked thread active
-  have copyEq := copy s metadata profile remaining capacity positive older caller finished id slot atSlot live cache
+  have copyEq := copy s metadata profile remaining capacity older caller finished id slot atSlot live cache
     callerNoClocks ghost shallowAfter
   have cleanupEq := ReturnStep.cleanup s metadata remaining capacity frame (LocalUnit.current older caller finished)
     target unwind continuation locals varargs

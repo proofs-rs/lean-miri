@@ -22,6 +22,7 @@ mod pool_constant;
 mod pool_instance;
 mod pool_layout;
 mod pool_type;
+mod validation_rank;
 mod pool_values;
 mod producer;
 mod query_values;
@@ -83,7 +84,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8eb778d04094d3af4b26580cab327e0413eb1e02";
 const MIRI_COMMIT: &str = "93c45edea8b148a6b6f05ec9384449a04217143f";
-const ROOT_SCHEMA_VERSION: u64 = 16;
+const ROOT_SCHEMA_VERSION: u64 = 17;
 
 struct Options {
     output: PathBuf,
@@ -1767,6 +1768,7 @@ impl ExportCallbacks {
             selected_scope,
             invocation: self.invocation.take(),
         };
+        validation_rank::assign(&mut document.types)?;
         shared_json::freeze(&mut document)?;
         #[cfg(feature = "miri-reference")]
         let miri_reference_frontier = document
@@ -3422,6 +3424,7 @@ fn type_json_inner<'tcx>(
     };
     Ok(Type {
         type_id: id,
+        validation_rank: 0,
         display: input.to_string(),
         shape,
         source_layout,

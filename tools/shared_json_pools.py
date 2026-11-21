@@ -32,8 +32,8 @@ def _walk(value, transform):
 
 def pool_document(document):
     """Share repeated payloads of a current expanded input without changing values."""
-    if type(document.get("schema_version")) is not int or document["schema_version"] != 16:
-        raise ValueError("fixture pooling requires schema 16")
+    if type(document.get("schema_version")) is not int or document["schema_version"] != 17:
+        raise ValueError("fixture pooling requires schema 17")
     document = {key: copy.deepcopy(value) for key, value in document.items()
                 if key not in SHARED_POOLS}
     pools = {name: [] for name in SHARED_POOLS}

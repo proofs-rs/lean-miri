@@ -15,7 +15,7 @@ value write and source span equations come from their raw-data component
 proofs. The public endpoint must discharge all three; they are not validity
 or metadata fields. Unit copying and nested validation use the shared stages. -/
 theorem from_allocation (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F)
     (machine allocatedMachine movedMachine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (baseLayout : LocalLayout)
@@ -59,7 +59,7 @@ theorem from_allocation (s : Static) (metadata : Metadata s) (profile : Profile 
   have foot := ProjectedFootprint.atState (LocalUnit.current frames frame movedMachine)
     (LocalUnit.current frames updated movedMachine) parent.ptr baseLayout.layout.size footprint rfl rfl
   have nextCache : nextSlot.layout = some baseLayout := cache
-  have valid := ProjectedValidate.concrete s metadata profile remaining capacity positive frames updated movedMachine
+  have valid := ProjectedValidate.concrete s metadata profile remaining capacity frames updated movedMachine
     id nextSlot baseLayout parent allocation tag offset atNext rfl nextCache noClocks noGhost shallow rfl foot within signed
   have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) (remaining+1) metadata.construction s.cfg

@@ -31,93 +31,6 @@ theorem validate_capacity_one (s : Static) (metadata : Metadata s)
   simp only [BodyPlaceDictionaries.validation,zero]
   rfl
 
- theorem validate_visit_zero
-    (h : BodyDictionaries.Visitor) (state : State) (place : RuntimePlace Provenance) (name : String)
-    (noGhost : state.machine.user.payload.ghost = false)
-    (ghost : @h.withGhostValidation = @ValidityMachine.withGhostValidation MiriMemoryKind
-      (EvalCoreMachine.Stored Unit Unit Unit Unit Unit Unit Unit Unit MinimalHost))
-    (nameQuery : h.typeName () place.layout.ty state = .ok name state)
-    (readQuery : h.toOp () place (BodyValidation.active state) =
-      .ok ⟨.immediate .uninit,place.layout⟩ (BodyValidation.active state)) :
-    ValidityVisitor.validatePlace h () 0 place false true state =
-      .error (.resourceExhaustion "validity traversal fuel") state := by
-  unfold ValidityVisitor.validatePlace
-  simp only [ghost,bind,Bind.bind,EStateM.bind,nameQuery,
-    ValidityMachine.withGhostValidation,noGhost,Bool.false_eq_true,↓reduceIte]
-  simp only [BodyValidation.active] at readQuery
-  simp only [readQuery,pure,Pure.pure,EStateM.pure,ValidityVisitor.visit,
-    throw,throwThe,MonadExceptOf.throw,EStateM.throw,bind,Bind.bind,EStateM.bind]
-  cases state
-  simp_all
-  rename_i stack machine
-  rw [←noGhost]
-
- theorem canonical_validation_zero (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
-    (bytes : CompilerGlobalBytes.Prepared) (options : EvalConfigurationCore.Options)
-    (leaves : RootLeaves) (remaining : Nat) (contract : Construction p) (config : CanonicalDictionaries.Config)
-    (built : EvalConfigurationCore.make p image bytes options leaves () (remaining+1) = .ok config)
-    (frames : Array BodyStep.F) (frame : BodyStep.F)
-    (machine : MachineHooks.MachineState MiriMemoryKind RootUser) (layout : LocalLayout)
-    (debugOff : options.place.debugAssertions = false)
-    (sized : layout.layout.isSized = true) (noClocks : frame.extra.dataRace = none)
-    (noGhost : machine.user.payload.ghost = false)
-    (node : TypeNode) (nodeFound : p.lifecycle.calls.symbols.facts.context.runtime.node layout.ty = .ok node) :
-    ValidityVisitor.validatePlace config.validity () 0 (BodyStep.destination frames frame layout) false true
-      (BodyStep.current frames (BodyStep.withUnit frame .uninit (some layout)) machine) =
-      .error (.resourceExhaustion "validity traversal fuel")
-        (BodyStep.current frames (BodyStep.withUnit frame .uninit (some layout)) machine) := by
-  have methods := BodyDictionaries.fields_of_make p image bytes options leaves remaining contract config built
-  have nameEq : config.validity.typeName =
-      (CompilerFactAdapters.validityHooks p.lifecycle.calls.symbols.facts config.validity).typeName :=
-    congrArg BodyDictionaries.Queries.typeName methods
-  have ghostEq : @config.validity.withGhostValidation =
-      @ValidityMachine.withGhostValidation MiriMemoryKind
-        (EvalCoreMachine.Stored Unit Unit Unit Unit Unit Unit Unit Unit MinimalHost) :=
-    congrArg (fun q => @q.ghost) methods
-  apply validate_visit_zero config.validity _ _ node.display noGhost ghostEq
-  · rw [nameEq]
-    exact BodyQueries.adapter_name _ _ () _ _ node nodeFound
-  · have read := BodyDictionaries.read_of_make p image bytes options leaves remaining contract config built
-      frames frame {machine with user := {machine.user with payload := {machine.user.payload with ghost := true}}}
-      layout debugOff sized noClocks
-    simpa only [BodyValidation.active,BodyStep.current,LocalUnit.current,BodyStep.destination] using read
-
- theorem validate_budget_zero (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (zeroBudget : s.options.limits.validation = 0)
-    (frames : Array BodyStep.F) (frame : BodyStep.F)
-    (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
-    (noClocks : frame.extra.dataRace = none)
-    (noGhost : machine.user.payload.ghost = false)
-    (shallow : machine.user.payload.validation = .Shallow) :
-    s.cfg.projection.place.validate () (BodyStep.destination frames frame s.abi.ret.layout)
-      (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
-      .error (.resourceExhaustion "validity traversal fuel")
-        (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
-  let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
-      ((remaining+1)+1) = .ok s.cfg := by
-    simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
-  obtain ⟨inner,innerBuilt,_⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
-    s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
-  obtain ⟨node,nodeFound⟩ := metadata.unitNode
-  have valid := canonical_validation_zero s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
-    leaves remaining metadata.construction inner innerBuilt frames frame machine s.abi.ret.layout
-    profile.debug metadata.unitSized noClocks noGhost node nodeFound
-  rw [fields.projection]
-  simp only [ValidityMachine.placeHooks,ValidityMachine.compilerPolicy,PlaceMachine.placeHooks]
-  rw [fields.validate]
-  simp only [BodyPlaceDictionaries.validation,innerBuilt]
-  unfold ValidityMachine.validateRuntime
-  simp only [ValidityMachine.enforceValidityRecursively,BodyStep.current,LocalUnit.current,
-    get,getThe,MonadStateOf.get,EStateM.get,bind,Bind.bind,EStateM.bind,
-    shallow,show (ValidityMachine.ValidationMode.Shallow == .Deep) = false from by decide,
-    beq_self_eq_true,pure,Pure.pure,EStateM.pure,zeroBudget]
-  simpa only [BodyStep.current,LocalUnit.current] using valid
-
-
  theorem constant_positive (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+1)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
@@ -422,28 +335,6 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
   intro machine _ _
   exact validate_capacity_one s metadata capacity () _ _
 
- theorem step_validation_zero (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (zeroBudget : s.options.limits.validation = 0)
-    (frames : Array BodyStep.F) (frame : BodyStep.F)
-    (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
-    (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
-    (function : frame.functionInstance = s.functionInstance)
-    (location : frame.location = .mir ⟨0,0⟩)
-    (noClocks : frame.extra.dataRace = none)
-    (noGhost : machine.user.payload.ghost = false)
-    (shallow : machine.user.payload.validation = .Shallow)
- :
-    ExecutionMachine.step s.cfg s.limits ()
-      (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
-      (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine,
-        .error (.resourceExhaustion "validity traversal fuel")) := by
-  apply step_error s metadata profile (remaining+1) (by omega) frames frame machine bodyIdentity body function location
-    noClocks noGhost shallow
-  intro machine ghost validation
-  exact validate_budget_zero s metadata profile remaining capacity zeroBudget frames frame machine noClocks ghost validation
-
 open Lean Elab Command in
 run_cmd do
   let mut total : Nat := 0
@@ -456,5 +347,4 @@ run_cmd do
           throwError "unapproved body failure axiom {dependency} in {name}"
   logInfo m!"Audited {total} body failure declarations"
 #print axioms step_capacity_one
-#print axioms step_validation_zero
 end EmptyFunction.BodyFailures

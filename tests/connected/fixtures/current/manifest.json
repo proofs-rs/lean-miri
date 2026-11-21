@@ -1,6 +1,6 @@
 {
   "schema": "lean-miri-connected-cohort-v1",
-  "schema_version": 16,
+  "schema_version": 17,
   "rustc_commit": "8eb778d04094d3af4b26580cab327e0413eb1e02",
   "miri_commit": "93c45edea8b148a6b6f05ec9384449a04217143f",
   "cases": {
@@ -9,7 +9,7 @@
       "required_output": [
         "outcome=natural_exit_zero; leak_check=true; threads=1; choice_cursor=304; active_frame=none"
       ],
-      "snapshot_sha256": "e89d96e1b0aef0be8f03d84a540f273524c6cf3d31e24fcd26179e03e264f2c5",
+      "snapshot_sha256": "a02c285b531bcaf7241741cb1e967d51d92f2e8e7dacaa7c523157e4cb461ddb",
       "reference_seed": null
     },
     "192-active-protector-typed-ub": {
@@ -20,7 +20,7 @@
         "threads=1",
         "stop-after-root-return=false"
       ],
-      "snapshot_sha256": "2ac21a59e28f7dfdcdabcffffeda65176a1093d8866b769c717b11775415a23b",
+      "snapshot_sha256": "af800a3dcec6731e3721ba0f07aaaceca3521de43c63e1694c7f3295b65d5861",
       "reference_seed": null
     },
     "193-rmw-release-positive": {
@@ -28,7 +28,7 @@
       "required_output": [
         "outcome=exit_zero; leak_check=true; threads=3; choice_cursor=506; active_frame=none"
       ],
-      "snapshot_sha256": "307b31b1d25d3d22b27c96c3de740e882bc4aa4288c98a94864d9d41a67540c2",
+      "snapshot_sha256": "d173e4a01d762969ee63fc75d7542264aaf5bd8ca7830b3411e05ad3de87dfbe",
       "reference_seed": null
     },
     "193-replace-store-datarace-negative": {
@@ -36,7 +36,7 @@
       "required_output": [
         "outcome=typed_DataRace_before_any_join; error=Miri.Interpreter.StepError.undefinedBehavior \"DataRace\"; threads=3; choice_cursor=205"
       ],
-      "snapshot_sha256": "2633ff531b587180a63fbb5462d96eeee45fc7837cd75d733fe44f3f7b0f8dfb",
+      "snapshot_sha256": "033d941be9a00bb491fe5fe3cbf9a9653fd082b54a5a6bc0c58e2d225b9aefdb",
       "reference_seed": 2
     },
     "196-slice-custom-dst": {
@@ -50,7 +50,7 @@
       "required_output": [
         "outcome=exit_zero; leak_check=true; threads=2; choice_cursor=469; active_frame=none"
       ],
-      "snapshot_sha256": "6dd24d725b075c96f4da2469f18a6393fe7c351b29fc9b05b45e0b311767a356",
+      "snapshot_sha256": "cbe6586e1f62747370fda654868b032146dab017ccf19b2aed56f117ba42052b",
       "reference_seed": null
     },
     "197-tls-drain-negative-prefix": {
@@ -58,7 +58,7 @@
       "required_output": [
         "outcome=expected_undefined_behavior; error=DanglingIntPointer(address=0,size=4,context=memory_access); count=1; threads=2; active_function=destructor_a; source_line=41; callback_mir_location=11:0; active_thread=child-1; main=blocked_join_child-1; child=enabled; pending_key_b=true"
       ],
-      "snapshot_sha256": "3c2510788ff4bd4fffb594bcc9bb2c2b55e981429332d4982901adb92c1408c5",
+      "snapshot_sha256": "1f17d64748d70eceeb6e19a52102b1501a02bd41c7c61d98332516190ddd8904",
       "reference_seed": null
     },
     "199-main-constructor-order": {
@@ -66,7 +66,7 @@
       "required_output": [
         "main_observed_trace=12\noutcome=exit_zero; leak_check=true; threads=1; choice_cursor=348; active_frame=none"
       ],
-      "snapshot_sha256": "b126702e6de2799d65f264efba5cd7bf74bf6afc7cb189bbb13acaf2a6949a81",
+      "snapshot_sha256": "2ee71a276272bbf270de2b0c710aab13d26a225968c4fee060e4fd063070bc47",
       "reference_seed": null
     },
     "203-upcast-a-prefix": {
@@ -74,7 +74,7 @@
       "required_output": [
         "trait_upcast_result=exit_zero; leak_check=true; threads=1; choice_cursor=52; active_frame=none"
       ],
-      "snapshot_sha256": "fa783547c974c2f037fcba28b76eb516a7ad90ba2ac6ad7e9b61350d6fed27ec",
+      "snapshot_sha256": "9655bb20277f7a7fc89f87c7ba0977093de27659e1231b8686b8631f0f1485f7",
       "reference_seed": null
     },
     "203-upcast-b-slot": {
@@ -82,7 +82,7 @@
       "required_output": [
         "trait_upcast_result=exit_zero; leak_check=true; threads=1; choice_cursor=52; active_frame=none"
       ],
-      "snapshot_sha256": "64d36d03a915e65bc0260e7cdbdb8fd4fd10c98e097853b2b6b4efac28b10a14",
+      "snapshot_sha256": "bceddc950ee25964d55fd94ec0e26aac91851bcddf9c941278dae57d77d23943",
       "reference_seed": null
     },
     "198-sc-base": {
@@ -90,7 +90,7 @@
       "required_output": [
         "choice_mode=bounded-seeded-diagnostic seed=0 algorithm=SplitMix64-v1; outcome=exit_zero; leak_check=true; threads=3; choice_cursor=533; active_frame=none"
       ],
-      "snapshot_sha256": "55e0c844c7c89ac1eaebd6be638545b3de03cf4b3c2084d0cea1410bbe9a40dc",
+      "snapshot_sha256": "1b3c9aed3c99c0a8d818b87d3934d62291aa653426c74d7d4cf5471b226dfd99",
       "reference_seed": null
     },
     "198-relaxed-00": {
@@ -98,75 +98,75 @@
       "required_output": [
         "choice_mode=bounded-seeded-diagnostic seed=0 algorithm=SplitMix64-v1; outcome=exit_zero; leak_check=true; threads=3; choice_cursor=540; active_frame=none"
       ],
-      "snapshot_sha256": "9a9e08850de3d370f64b5476e0f071fc7f000c9668bd33ffd74447df118b0f87",
+      "snapshot_sha256": "f174c171bfb4dd7ce2d2291d4214787a221e73b56ff6e7b2cf01b540c0ce9067",
       "reference_seed": 1
     },
     "fence-acqrel": {
       "source_sha256": "2c6645e8da4e849ea7e13e3a1bcc5c1293a8965e7ab53605997a18d412048c26",
-      "snapshot_sha256": "ed91b6801c87b591b85c20a62e80665afa8058b071706722118825df263124f8",
+      "snapshot_sha256": "59560e91abc2422151f828f9b07f5849f0d6bf11a766a37d1fa472d4cdd9b010",
       "reference_seed": 3
     },
     "fence-sc": {
       "source_sha256": "e55a059e733243d97e9a4ef5aa7e3ff9a264dcfbdcd07b74c04fc79fffc76905",
-      "snapshot_sha256": "c07f6c8f42ad06565a5cc8a35c06e0c5c8c33984190b879189094b2e2155b3ba",
+      "snapshot_sha256": "6cc90d844d667c4fc3b85c159fd918da10c596a8568acee8d40bdd98005f8ccd",
       "reference_seed": null
     },
     "rmw-relaxed": {
       "source_sha256": "31042ff16963a0730d1d5d6f511bf240bc293d3a3e46880b8ab8ba7cea90975e",
-      "snapshot_sha256": "05b9bf14e5a29d8da44346ca813ab3e5d6120060b486209f9ff21a78e678c69a",
+      "snapshot_sha256": "c73d75f4a6a0c91d503bdf4006e4a39d4cba95b36466032b3775149dbf264b81",
       "reference_seed": null
     },
     "rmw-sc": {
       "source_sha256": "059cb871809b85b579e70e0ae372203681be184c82df093d2032dccd38a00be0",
-      "snapshot_sha256": "31f2bb7d300994e2dab4ac7fdd8b92ed20791e644044bca2e93685cd62c9bd72",
+      "snapshot_sha256": "e0a46520100bc95c3b61bf9c90c1ad8074fbd5fef3ae7cc75c2b25921361edec",
       "reference_seed": null
     }
   },
   "fresh_large_tb_choices": 48,
   "choice_migration": "Linux copy_file_range weak-function registration adds a function allocation and import pointer cell, consuming two addressReuse/addressSlack pairs before the old trace. Seeded diagnostics then advance the SplitMix stream by four draws, so their later schedule counts are separately measured.",
   "files": {
-    "192-active-protector-typed-ub.json.gz": "3741fef7bc6607dc0ddb46deed6eefa66730235665d7efacc2b12250a8389e79",
-    "192-active-protector-typed-ub.miri-error.txt": "5166a060581074cabf671fcd7f144425a88fa5aee754040457165c40cb3197c4",
-    "192-active-protector-typed-ub.reference.json": "f88a22a87175599742f7ba629c5385820d7da3011ca9da69d2fa8d18e89640de",
-    "192-released-natural-exit.json.gz": "46b717dd13355a5ba861da85087f0338bb73f0f066f7391dfe114505bfb2569e",
-    "192-released-natural-exit.reference.json": "621ce554778d844808d2699a31603d77fcf11e520553450d21d108b2a33329d7",
-    "193-replace-store-datarace-negative.json.gz": "6d55d8cd14bdc45176e31ad675333dcd5185eb9c6fd476d838a263fc66f97c2e",
-    "193-replace-store-datarace-negative.miri-error.txt": "b0579fb7594f0f802f859b3952c3d49990ed1bd220cf6cbd4abe23416eddef61",
-    "193-replace-store-datarace-negative.reference.json": "ea8965366352ca87fc1db9438fcc8e375c57c0715fc717b391102bff736e4bb0",
-    "193-rmw-release-positive.json.gz": "3420b028541a0d5c3fc963b2f985de1b664545767fb009d5b74ea2f535479f36",
-    "193-rmw-release-positive.reference.json": "ad8410a92c1b2fb053bf7d4fa92f5548053824c1bf5c947d13789958577e5b68",
-    "197-tls-drain-negative-prefix.json.gz": "9fd8659576bab5d136554c312cdc6d466110916aa7d490b72aaf5e85171a0d02",
-    "197-tls-drain-negative-prefix.miri-error.txt": "5463a189421aab3cc4144dcb4644fc8efb98ae30b8e634178a1bd42e32c64511",
-    "197-tls-drain-negative-prefix.reference.json": "2e0fbc3776f4b27e1156006dd8b856ebfbe88c738cfcf20e3be10d1db241a1c7",
-    "197-tls-drain-positive.json.gz": "7094be63cf50bd973fcf3545eb2e095d04ea9596f2533e2a3c6efd9a1d0944ea",
-    "197-tls-drain-positive.reference.json": "316dab999904b1b727ba0a41c4d0531a92dadd5cae9be6debde6af0fdc560697",
-    "198-relaxed-00.json.gz": "d76541aa3d6b29a6ef3f35f865f72d6b90ccc51ef65ae9d73debcfac9555c9b3",
-    "198-relaxed-00.reference.json": "5139619bdeca0d67a912513e0f20979506747eddf4fe095d2508ac6cb5499aba",
-    "198-sc-base.json.gz": "f57ab7a9407eb9f487260380bb9d91c749a2ff2c6cd81ed6956e6d277ce77acc",
-    "198-sc-base.reference.json": "8b6d19bb8fb76105ac9e3304e010e2d7681a660fa951418d6a9611a9be1efa84",
-    "199-main-constructor-order.json.gz": "4bc83d732e0715e30e7e8430a9182652f980e909f63bb7ab11ff1ebd683130a8",
-    "199-main-constructor-order.reference.json": "8e08fb5ae9a7c66278e9b84ec7f103d9300138adcc8ac687215bda1193b65f6a",
-    "203-upcast-a-prefix.json.gz": "d5e0247fbc2be8fa85ea2f5607758e6353902fe7bdc679cdf1ced01e9152c71d",
-    "203-upcast-a-prefix.reference.json": "37b85486dc2889c5526adebc0cacb72dd2b270db8755eaeec68ddb5e0747d43a",
-    "203-upcast-b-slot.json.gz": "c53fd0ff39f129e140beb622add71945fb8e5e944eb627f784ed10607f5449b8",
-    "203-upcast-b-slot.reference.json": "e93af48d613fef8173023b22f60695b549304dbaa8e5cc864964b300b00431df",
-    "fence-acqrel.json.gz": "18786ccfe5b208fb382202b901f72e27cbb7d2a4cdf37d05eec4c23325614ca2",
+    "192-active-protector-typed-ub.json.gz": "7a9de10f48135286013e6bc19e59efb16087daf8281d348b454cfc2d1e2f52e6",
+    "192-active-protector-typed-ub.miri-error.txt": "48a60369e461b626387b7012233c71ee8e7e7b696740709b595ca497931757f6",
+    "192-active-protector-typed-ub.reference.json": "249b39c3c7e4a5059c73103a48119b5b85bd4cb3b0aedf7715b93d1550e93227",
+    "192-released-natural-exit.json.gz": "491a044591b3ad17ead4d20e2babeb9ca81c265639fa8111a2402449c6dfb2af",
+    "192-released-natural-exit.reference.json": "3db07ceb1de22878b34c0f3f5006eecffc89b0683ed0f594fcfad5a267b70f71",
+    "193-replace-store-datarace-negative.json.gz": "2a3f44bad0bd3e6e7af5aebdcba812b79e94c0602e5c11154b96bbb558090c70",
+    "193-replace-store-datarace-negative.miri-error.txt": "fe22a08149a318ef212e34c8092edee34ea5bff75f7b9bb5f6a71730e6839485",
+    "193-replace-store-datarace-negative.reference.json": "a7014d93d564bd240dd570fde747ebf4a1d76d2ed48b1ce623226982a8fd22b2",
+    "193-rmw-release-positive.json.gz": "8cc9b24273cda2bf537205536bb01450f4ce54ab0e75ef4bc1128b3dde61cd28",
+    "193-rmw-release-positive.reference.json": "423184c49c3e552e69182a8f1e27a1bd5cb154a6e352ee3f862d35d8e0ceda76",
+    "197-tls-drain-negative-prefix.json.gz": "3ae9fab129d4352ceeb645667dd43681d04642f432d435cc0a4d0d7c2999b744",
+    "197-tls-drain-negative-prefix.miri-error.txt": "ffc805df7899d3bff8fa290c0330c1e0c3b49adcf6d916157090c6d083126668",
+    "197-tls-drain-negative-prefix.reference.json": "1a4ddc2706fd739a2adf9bc9e03c47f3192584b2b0f43b8ba601bcabe20d14a8",
+    "197-tls-drain-positive.json.gz": "2072b246b159084e6597c0393919edd55d6110d3c169dc8d42e107f451abe3a9",
+    "197-tls-drain-positive.reference.json": "7a8332bd3eb7b0100cbc8cc96a54aa1af773046a2bdb030fa3787e0a26e3a31d",
+    "198-relaxed-00.json.gz": "6160fa82e5f2ce2027e04b876a4381a5b23a47afb12c8306694b73655aecc029",
+    "198-relaxed-00.reference.json": "c6e1e12c14333c61e1b994a9a334255a715a3c17f0e6f2813e26bc19d429d843",
+    "198-sc-base.json.gz": "c4abeb1c9418a56e9982e988377cd6694f69766ca6551db8242cd3c893efb55c",
+    "198-sc-base.reference.json": "e1ca4a1e63a964c3d4b11bcc28cb9343ac3aaed3c30d764924c9c424c5b17a05",
+    "199-main-constructor-order.json.gz": "b5fb8017fe5d7cf4c84420c9f593db16fbde45fc7d73f4e456df6813170a4d3a",
+    "199-main-constructor-order.reference.json": "51c2319f265259160f5728e8899cd043aea4392796eefd5dd4ae1470f53424e4",
+    "203-upcast-a-prefix.json.gz": "b9833df3cecb4e19c867a262cabbd7f5c6071d5cacd211a19211418473cc390f",
+    "203-upcast-a-prefix.reference.json": "f6cccd092b854d1c82a527dd977bfeca02d29b3c0087d58ef637d6946a7dc15b",
+    "203-upcast-b-slot.json.gz": "b8dc38588daf1c561098c270aaf2c275e49cbf7afa27f328c0f8e6adde95073e",
+    "203-upcast-b-slot.reference.json": "39423684f329ac62e6b77795edac73482dfd86cb7573130cd6911e5b8ef66a5c",
+    "fence-acqrel.json.gz": "1400f956476cf15e69d67559202bc83b60a4ee26672cba9b981eb49350e08c7a",
     "fence-acqrel.observed.json": "8acd054caffec41becbd54259ec985d0aa428e008abea48c3a22f87f154676fe",
-    "fence-acqrel.reference.json": "7f21048c1ee7d8e2319da43bb173ab437130fe421c97fc259ec318397ade7639",
+    "fence-acqrel.reference.json": "2697b2187a1f7dcd48631bd4be27106af13389cc7b9e31c93528a6a2a9db0465",
     "fence-acqrel.tape.json": "527f0facbca61892a13cfc576cf0910f6c853ac78fe2092097e39d7b8776b496",
-    "fence-sc.json.gz": "59ed8a4f6e81ab033b94562c5a3d9da4aa42d815205689f1e046628c77613660",
+    "fence-sc.json.gz": "1c4c364dd4b87c2e9504e60e792ae616dd5423ee86edd84c81370fc88179c393",
     "fence-sc.observed.json": "3efca019591ff4749b5c1578eb1cbd08e017247da6b7a13b1ecee98bfb207eea",
-    "fence-sc.reference.json": "4edf9961ce2b15f77fc8e08c87e792b1b3f036025ab9b1582c9e7222a585535a",
+    "fence-sc.reference.json": "8c20bc47e80a8af9cfd9020108e0110b16beabf739bd840276bf662e8e128410",
     "fence-sc.tape.json": "abfe839745cbccb740362b9627891aef93299564ed4db7506561474db9a3da7b",
-    "rmw-relaxed.json.gz": "76d8a6b262fad194c14fa1fff7413a6563af4d89f3deff2ef351fffcd299a43c",
+    "rmw-relaxed.json.gz": "9b54ddd35ba7ed9d2aa18fcfe73d5125a1e7069eefcf1fd8d81394e6a82b3ad1",
     "rmw-relaxed.observed.json": "c05fcb95ad8abce16028af1ade1d3079a5e4618193a7fdb4feb80652e838b701",
-    "rmw-relaxed.reference.json": "a3791af5dcb18011a57466e8ce515d878f0dd7ef1226b327e8d8b4f0dd8fe0e8",
+    "rmw-relaxed.reference.json": "9c45e6b001b9e6a23fbebc4cb6ac4d36954f260fb5481e4f154b80ccc16f2dfa",
     "rmw-relaxed.tape.json": "b530df7847c23bc906f896d7a850096d166e4d4f85b207a1cbc014333edfd7e5",
-    "rmw-sc.json.gz": "226de31c5839764d28de7d43bf676dea3165f2b2c9b8f2d23a0a0e2f06eb0b4e",
+    "rmw-sc.json.gz": "21309d65c05037a8a4c895908dd423f72c69c55f827cbb180057e0654c0467f4",
     "rmw-sc.observed.json": "6bb6ca979de47d0d2a67be2c316977f782d01d9844cb3092f2464da0e4969990",
-    "rmw-sc.reference.json": "c97b6b93ce957132ab9b1a75dfcadd81951c4f2cc59810280bbd417d1d83b567",
+    "rmw-sc.reference.json": "1ba4e6bc220d2995458f6c622eaf0f89ed1937fa931f4d4317a9db3dcffd9537",
     "rmw-sc.tape.json": "c683102ff40faf1139aed0b37742debf8535f2c9afc137747b65142cb3ba8f1e",
-    "README.md": "8e1ce295133b4dc7fb6181323962e02dd0f0b14e97edbcd79346b728b68e60c3"
+    "README.md": "9cd41322eb732214908713ce5ef4426115abc273f4eb09bc13cfc17f7a03b6c2"
   },
-  "generation_revision": "5c3c61687da58647134101898219a3694358d936"
+  "generation_revision": "7f645bb61c75e1c38c6e68aec35310b864cce97d"
 }

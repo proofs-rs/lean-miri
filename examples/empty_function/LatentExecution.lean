@@ -77,7 +77,6 @@ theorem run (s : Static) (metadata : Metadata s) (profile : Profile s)
   have positive : 0 < s.capacity := by have bound := resources.capacity; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 :=
     ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   let registered := registeredFrame frame {} id input.tracker.global.nextPointerTag
   let changed := {machine with memory := replaceTree machine.memory id entry tree}
   let initial := LocalUnit.current p.before.stack.frames registered changed
@@ -88,7 +87,7 @@ theorem run (s : Static) (metadata : Metadata s) (profile : Profile s)
     change {registered with locals := #[{value := .live (.immediate .uninit),layout := none}]} = registered
     dsimp only [registered,registeredFrame]
     rw [←locals]
-  have first := BodyAssignment.step s metadata profile remaining capacity validation p.before.stack.frames registered changed
+  have first := BodyAssignment.step s metadata profile remaining capacity p.before.stack.frames registered changed
     identity body function location noClocks noGhost shallow
   rw [same] at first
   have firstEq : ExecutionMachine.step s.cfg s.limits () initial = (middle,.ok true) := first
@@ -119,7 +118,7 @@ theorem run (s : Static) (metadata : Metadata s) (profile : Profile s)
     rw [continuation]
     unfold CanonicalInit.normalizedContinuation
     split <;> exact ⟨_,rfl⟩
-  have returned := ReturnSingleton.core_from_pop s metadata profile remaining capacity validation older input.caller
+  have returned := ReturnSingleton.core_from_pop s metadata profile remaining capacity older input.caller
     nextFrame post finalMachine body rfl rfl noClocks poppedEq destination.place
     (returnPlace.trans destination.encoding) destination.layout destination.sizedMetadata destination.alignmentCache
     p.returnBlock unwind normalCont varargs ghostPost shallowPost

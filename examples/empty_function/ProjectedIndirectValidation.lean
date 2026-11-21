@@ -156,9 +156,8 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
       .ok ⟨.indirect place.mplace,place.layout⟩ (BodyValidation.active state))
     (forceQuery : forceAllocation config.validity.projection.place () ⟨reference,place.layout⟩ (BodyValidation.active state) =
       .ok place (BodyValidation.active state))
-    (layout : place.layout = s.abi.ret.layout) (noGhost : state.machine.user.payload.ghost = false)
-    (fuel : Nat) :
-    ValidityVisitor.validatePlace config.validity () (fuel+1) (⟨reference,place.layout⟩ : RuntimePlace Provenance) false true state =
+    (layout : place.layout = s.abi.ret.layout) (noGhost : state.machine.user.payload.ghost = false) :
+    ValidityVisitor.validatePlace config.validity () (⟨reference,place.layout⟩ : RuntimePlace Provenance) false true state =
       .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
   have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
@@ -183,7 +182,7 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
     congrArg BodyDictionaries.Queries.debug methods
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
   have sized : place.layout.layout.isSized = true := by rw [layout]; exact metadata.unitSized
-  apply LocalIndirectReturnCopy.shallow_indirect config.validity fuel state reference place node.display noGhost ghostEq
+  apply LocalIndirectReturnCopy.shallow_indirect config.validity state reference place node.display noGhost ghostEq
   · rw [nameEq,layout]
     exact BodyQueries.adapter_name _ _ () _ _ node nodeFound
   · exact readQuery
@@ -205,7 +204,6 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
 
  theorem validate_from_queries (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (state : WholeCall.State) (reference : RuntimePlaceRef Provenance) (memory : MemPlace Provenance)
     (inner : WholeCall.Config)
     (innerBuilt : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
@@ -226,9 +224,8 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
   have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
     (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
-  have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
   have valid := canonical_unit s metadata profile remaining inner innerBuilt state reference ⟨memory,s.abi.ret.layout⟩
-    readQuery forceQuery rfl noGhost (s.options.limits.validation-1)
+    readQuery forceQuery rfl noGhost
   rw [fields.projection]
   simp only [ValidityMachine.placeHooks, ValidityMachine.compilerPolicy, PlaceMachine.placeHooks]
   rw [fields.validate]
@@ -238,13 +235,11 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
   simp only [ValidityMachine.enforceValidityRecursively,
     get, getThe, MonadStateOf.get, EStateM.get, bind, Bind.bind, EStateM.bind,
     shallow, show (ValidityMachine.ValidationMode.Shallow == .Deep) = false from by decide, beq_self_eq_true, pure, Pure.pure, EStateM.pure]
-  rw [budget]
   exact valid
 
 
 theorem validate_projected (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F) (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (base : LocalLayout)
     (memory shifted : MemPlace Provenance) (amount : Size)
@@ -267,7 +262,7 @@ theorem validate_projected (s : Static) (metadata : Metadata s) (profile : Profi
   have forced := force_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
     inner built frames frame active s.abi.ret.layout amount id slot memory shifted atSlot live profile.debug
     metadata.unitSized noClocks wrapping
-  exact validate_from_queries s metadata profile remaining capacity positive (LocalUnit.current frames frame machine)
+  exact validate_from_queries s metadata profile remaining capacity (LocalUnit.current frames frame machine)
     (.local frames.size id (some amount) frame.localsIdentity) shifted inner built read forced noGhost shallow
 
 end EmptyFunction.ProjectedIndirectValidation

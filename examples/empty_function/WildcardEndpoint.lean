@@ -88,13 +88,12 @@ theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
   have positive : 0 < s.capacity := by have bound := resources.capacity; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 :=
     ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   obtain ⟨entry⟩ := WildcardInit.install s metadata profile p runtime input resources destination wild resident
   let frame := {(BodyStep.withUnit entry.frame .uninit (some s.abi.ret.layout)) with location := .mir ⟨0,1⟩}
   have entrySame : BodyStep.withUnit entry.frame .uninit none = entry.frame := by
     change {entry.frame with locals := #[{value := .live (.immediate .uninit),layout := none}]} = entry.frame
     rw [←entry.locals]
-  have first := BodyAssignment.step s metadata profile remaining capacity validation p.before.stack.frames
+  have first := BodyAssignment.step s metadata profile remaining capacity p.before.stack.frames
     entry.frame entry.machine entry.identity entry.body entry.function entry.location entry.noClocks entry.ghost entry.shallow
   rw [entrySame] at first
   let installed := LocalUnit.current p.before.stack.frames entry.frame entry.machine
@@ -196,7 +195,7 @@ theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
     rw [continuation]
     unfold CanonicalInit.normalizedContinuation
     split <;> exact ⟨_,rfl⟩
-  have returned := ReturnSingleton.core_from_pop s metadata profile remaining capacity validation older input.caller
+  have returned := ReturnSingleton.core_from_pop s metadata profile remaining capacity older input.caller
     frame post finalMachine body location locals noClocks popped destination.place
     (returnPlace.trans destination.encoding) destination.layout destination.sizedMetadata destination.alignmentCache
     p.returnBlock unwind normalCont varargs ghostPost shallowPost

@@ -13,7 +13,7 @@ set_option linter.unusedSimpArgs false
 /-- Internal composition for the common read/copy/cleanup/continuation stages.
 The pop equation is discharged by a raw release theorem, never by validity. -/
  theorem core_from_pop (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array LocalUnit.F) (caller frame : LocalUnit.F)
     (before after : MachineHooks.MachineState MiriMemoryKind RootUser)
     (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
@@ -31,7 +31,7 @@ The pop equation is discharged by a raw release theorem, never by validity. -/
       (LocalUnit.current (older.push caller) frame before) =
       (ReturnContinuation.resume older caller after target,.ok ()) := by
   have readEq := ReturnStep.read s metadata profile remaining capacity (older.push caller) frame before locals noClocks
-  have copyEq := ReturnStep.copy s metadata profile remaining capacity positive
+  have copyEq := ReturnStep.copy s metadata profile remaining capacity
     (⟨⟨older.push caller⟩,after⟩ : WholeCall.State) place layout noMeta aligned noGhost shallow
   have cleanupEq := ReturnStep.cleanup s metadata remaining capacity frame
     (⟨⟨older.push caller⟩,after⟩ : WholeCall.State) target unwind continuation locals varargs

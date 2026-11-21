@@ -1,4 +1,4 @@
-"""Strict schema-16 coroutine wire shapes; Lean validates compiler relationships.
+"""Strict schema-17 coroutine wire shapes; Lean validates compiler relationships.
 
 Auxiliary bodies retain their owner/role identity and never join callable bodies.
 These inspection checks do not establish compiler authenticity or guest safety.

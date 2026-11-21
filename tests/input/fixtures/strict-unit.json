@@ -1,6 +1,6 @@
 {
   "schema": "lean-miri-rustc-mir",
-  "schema_version": 16,
+  "schema_version": 17,
   "producer": {
     "miri_commit": "93c45edea8b148a6b6f05ec9384449a04217143f",
     "rustc_commit": "8eb778d04094d3af4b26580cab327e0413eb1e02",
@@ -60,7 +60,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 1,
@@ -96,7 +97,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 2,
@@ -132,7 +134,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 3,
@@ -168,7 +171,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 4,
@@ -204,7 +208,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 5,
@@ -240,7 +245,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 6,
@@ -276,7 +282,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 7,
@@ -312,7 +319,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 8,
@@ -348,7 +356,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 9,
@@ -384,7 +393,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 10,
@@ -420,7 +430,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 11,
@@ -455,7 +466,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 12,
@@ -491,7 +503,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 13,
@@ -527,7 +540,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 14,
@@ -566,7 +580,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 15,
@@ -605,7 +620,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 16,
@@ -644,7 +660,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 17,
@@ -683,7 +700,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 18,
@@ -718,7 +736,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     },
     {
       "type_id": 19,
@@ -760,7 +779,8 @@
         "type_id_hash": null,
         "is_x87_f80": false,
         "cfi_encoding": null
-      }
+      },
+      "validation_rank": 0
     }
   ],
   "allocations": [

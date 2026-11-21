@@ -15,7 +15,7 @@ open Lean
 def expectedMiriCommit : String := "93c45edea8b148a6b6f05ec9384449a04217143f"
 def expectedRustcCommit : String := "8eb778d04094d3af4b26580cab327e0413eb1e02"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 16
+def expectedSchemaVersion : Nat := 17
 
 def escapePathKey (key : String) : String :=
   key.toList.foldl (fun out char => out ++ match char with
@@ -1055,6 +1055,7 @@ private def parseSourceTypeLayout : Parser SourceTypeLayout := do
   pure source
 
 private structure parseTypeNodeFields where
+  validationRank : Option Nat := none
   sourceLayout : Option SourceTypeLayout := none
   typeId : Option Nat := none
   display : Option String := none
@@ -1063,12 +1064,14 @@ private structure parseTypeNodeFields where
 def parseTypeNode (path : String := "$parseTypeNode") : Parser TypeNode := do
   let s ← object ({} : parseTypeNodeFields) fun s key => do
     match key with
+    | "validation_rank" => return {s with validationRank := some (← natural)}
     | "source_layout" => return {s with sourceLayout := some (← parseSourceTypeLayout)}
     | "type_id" => return {s with typeId := some (← natural)}
     | "display" => return {s with display := some (← string)}
     | "shape" => return {s with shape := some (← parseTypeShape)}
     | _ => skipValue; pure s
   let node : TypeNode := {
+    validationRank := ← required s.validationRank "validation_rank"
     sourceLayout := ← required s.sourceLayout "source_layout"
     id := ← required s.typeId "type_id", display := ← required s.display "display"
     shape := ← required s.shape "shape" }

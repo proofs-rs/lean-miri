@@ -85,7 +85,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (place : MPlaceTy
     bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure]
 
  theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (state : WholeCall.State) (place : MPlaceTy Provenance)
     (layout : place.layout = s.abi.ret.layout)
     (noMeta : place.mplace.metadata = .none) (aligned : place.mplace.misaligned = none)
@@ -106,7 +106,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (place : MPlaceTy
     rw [fields.padding]
     simp [CompilerCopy.hasPadding,metadata.unitBackend,pure,Except.pure]
   have eq := bound_copy s s.abi.ret.layout place layout compatible padding metadata.unitSized
-  have safe := ReturnMemory.copy s metadata profile remaining capacity positive state place layout noMeta aligned noGhost shallow
+  have safe := ReturnMemory.copy s metadata profile remaining capacity state place layout noMeta aligned noGhost shallow
   change MachineHooks.run (copyRuntimePlace _ _ () _ _ true) state = _
   simp only [RuntimeStackPlace.toRuntimePlace]
   rw [eq]
@@ -132,7 +132,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (place : MPlaceTy
 /-- Actual normal Return after the terminator hook, with exact relevance-cache
 bookkeeping and caller continuation restoration. -/
  theorem core (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array BodyStep.F) (caller frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
@@ -162,7 +162,7 @@ bookkeeping and caller continuation restoration. -/
   have shallowAfter : finished.user.payload.validation = .Shallow := by
     unfold finished FrameExit.afterRelevanceAt
     split <;> exact shallow
-  have copyEq := copy s metadata profile remaining capacity positive
+  have copyEq := copy s metadata profile remaining capacity
     (⟨⟨frames⟩,finished⟩ : WholeCall.State) place layout noMeta aligned ghostAfter shallowAfter
   have cleanupEq := cleanup s metadata remaining capacity frame (⟨⟨frames⟩,finished⟩ : WholeCall.State)
     target unwind continuation locals varargs

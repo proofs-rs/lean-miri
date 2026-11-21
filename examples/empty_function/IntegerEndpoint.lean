@@ -31,16 +31,13 @@ set_option maxHeartbeats 8000000
   have budget : 64 ≤ resources.budget := by have bound := resources.reserve; unfold work at bound; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 :=
     ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by
-    have bound := resources.configuredValidation
-    omega
   obtain ⟨entry,machine,installed,body,identity,function,location,locals,tracked,noClocks,returnPlace,
     continuation,varargs,noGhost,shallow,previous,room,machineEq⟩ :=
       CanonicalInit.init_integer s metadata profile p runtime input resources destination integer
   have entrySame : BodyStep.withUnit entry .uninit none = entry := by
     change {entry with locals := #[{value := .live (.immediate .uninit),layout := none}]} = entry
     rw [←locals]
-  have bodyStep := BodyAssignment.step s metadata profile remaining capacity validation p.before.stack.frames entry
+  have bodyStep := BodyAssignment.step s metadata profile remaining capacity p.before.stack.frames entry
     machine identity body function location noClocks noGhost shallow
   rw [entrySame] at bodyStep
   let next := {(BodyStep.withUnit entry .uninit (some s.abi.ret.layout)) with location := .mir ⟨0,1⟩}
@@ -153,7 +150,6 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
   have positive : 0 < s.capacity := by have bound := resources.capacity; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 :=
     ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   obtain ⟨installed,frame,machine,installEq,depthEq,first,body,identity,function,location,locals,frameTracked,
     noClocks,returnPlace,continuation,varargs,noGhost,shallow,previous,room,machineEq⟩ :=
       init_body s metadata profile p runtime input resources destination integer
@@ -193,7 +189,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
   let finishedMachine := FrameExit.afterRelevanceAt (older.push input.caller) frame post
     (thread.topUserRelevantFrame.getD (older.push input.caller).size)
   let finish := ReturnContinuation.resume older input.caller finishedMachine p.returnBlock
-  have returned := ReturnStep.core s metadata profile remaining capacity validation older input.caller frame post
+  have returned := ReturnStep.core s metadata profile remaining capacity older input.caller frame post
     body location locals noClocks frameTracked (UnitRetag.allocatedTracker input.tracker room) tracked
     thread activePost destination.place (returnPlace.trans destination.encoding) destination.layout
     destination.sizedMetadata destination.alignmentCache p.returnBlock unwind normalCont varargs ghostPost shallowPost

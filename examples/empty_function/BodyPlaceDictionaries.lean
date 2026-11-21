@@ -16,7 +16,7 @@ def validation (p : CompilerProviders.Prepared) (image : AllocationImage.Importe
     Unit → RuntimePlace Provenance → MachineHooks.M MiriMemoryKind RootUser Unit :=
   fun choice place => match EvalConfigurationCore.make p image bytes options leaves () remaining with
     | .error error => throw error
-    | .ok inner => ValidityMachine.validateRuntime inner.validity choice options.limits.validation place true
+    | .ok inner => ValidityMachine.validateRuntime inner.validity choice place true
 
 structure Fields (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
     (bytes : CompilerGlobalBytes.Prepared) (options : EvalConfigurationCore.Options)

@@ -129,7 +129,7 @@ finite query/graph budgets remain supplied; all portable memory work is real. -/
 private def hooks [DecidableEq K] (host : Host K U C Code) (access : ValidityMachine.Access K U)
     (pointers : PointerMachine.Hooks K (ValidityMachine.Control U))
     (validity : ValidityVisitor.Hooks Provenance (State K U) C MachineHooks.FrameExtra F A Pad)
-    (validationBudget reachabilityBudget : Nat) :
+    (reachabilityBudget : Nat) :
     Native.Hooks Provenance (State K U) C (RuntimePlace Provenance) Code := {
   target := access.runtime.base
   hostBits := host.hostBits
@@ -182,7 +182,7 @@ private def hooks [DecidableEq K] (host : Host K U C Code) (access : ValidityMac
   tryResolve := fun _ => resolve pointers
   enforceValidity := fun _ _ => ValidityMachine.enforceValidity
   enforceRecursively := fun _ _ => ValidityMachine.enforceValidityRecursively
-  validate := fun c dest recursive reset => ValidityVisitor.validatePlace validity c validationBudget dest recursive reset
+  validate := fun c dest recursive reset => ValidityVisitor.validatePlace validity c dest recursive reset
   allocationFromAddress := fun _ address size => do
     if address >= 2^64 || size >= 2^63 then throw (.invalidProgram "native address lookup exceeds source integer domain")
     let state ← get
@@ -257,9 +257,9 @@ for type conversion; no baseline NativeHooks is a production input. -/
 def call [DecidableEq K] (host : Host K U C Code) (access : ValidityMachine.Access K U)
     (pointers : PointerMachine.Hooks K (ValidityMachine.Control U))
     (validity : ValidityVisitor.Hooks Provenance (State K U) C MachineHooks.FrameExtra F A Pad)
-    (validationBudget reachabilityBudget : Nat) (choice : C) (fuel : Nat)
+    (reachabilityBudget : Nat) (choice : C) (fuel : Nat)
     (name : String) (dest : RuntimePlace Provenance) (args : Array (OpTy Provenance)) : M K U Bool := do
-  let engine := hooks host access pointers validity validationBudget reachabilityBudget
+  let engine := hooks host access pointers validity reachabilityBudget
   let mut selected := none
   let libraries := host.libraries (← get)
   for index in [:libraries.size] do
@@ -298,7 +298,7 @@ def call [DecidableEq K] (host : Host K U C Code) (access : ValidityMachine.Acce
   processWrite access id (some (offset,dest.layout.layout.size.bytes.toNat))
   if ← ValidityMachine.enforceValidity then
     let recursive ← ValidityMachine.enforceValidityRecursively
-    ValidityVisitor.validatePlace validity choice validationBudget dest recursive true
+    ValidityVisitor.validatePlace validity choice dest recursive true
   pure true
 
 end Miri.Interpreter.NativeMachine

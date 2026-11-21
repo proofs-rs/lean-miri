@@ -9,6 +9,7 @@ open Miri.ABI Miri.Memory Miri.MIR
 open ValidityVisitor Miri.Memory.Validity
 open MachineHooks (FrameExtra)
 structure Leaves (S C : Type) where
+  typeRank : S → TyId → Nat
   classify : C → TyId → M S TypeKind
   unitLayout : C → M S LocalLayout
   typeName : C → TyId → M S String
@@ -21,7 +22,7 @@ structure Leaves (S C : Type) where
   ctfePointerLookup : C → MPlaceTy Provenance → CtfeMode → M S PointerAllocLookup
 
 def Leaves.ofHooks (h : Hooks Provenance S C E F A Pad) : Leaves S C :=
-  ⟨h.classify,h.unitLayout,h.typeName,h.opsemInhabited,h.isFreeze,h.fieldPath,h.variantPath,
+  ⟨h.typeRank,h.classify,h.unitLayout,h.typeName,h.opsemInhabited,h.isFreeze,h.fieldPath,h.variantPath,
     h.projectBox,h.metadataTail,h.ctfePointerLookup⟩
 
 def hooks [DecidableEq K] (queries : Leaves (ValidityMachine.State K U) C)
@@ -38,6 +39,7 @@ def hooks [DecidableEq K] (queries : Leaves (ValidityMachine.State K U) C)
   let dynamic := PlaceDynamic.withVTable projection.dynamic vtable
   let environment := ValidityMachine.memoryEnvironment access
   let source : Hooks Provenance (ValidityMachine.State K U) C FrameExtra F A ValidityMemory.PaddingHandle := {
+    typeRank := queries.typeRank
     classify := queries.classify
     unitLayout := queries.unitLayout
     typeName := queries.typeName

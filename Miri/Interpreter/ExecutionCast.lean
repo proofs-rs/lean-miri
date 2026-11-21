@@ -67,7 +67,7 @@ def hooks [DecidableEq K] (queries : Leaves (State K U) C)
     (dereference : C → OpTy Provenance → M K U (MPlaceTy Provenance))
     (projectRead : C → OpTy Provenance → Nat → M K U (OpTy Provenance))
     (validationRecursive : C → LocalLayout → M K U Bool)
-    (retagBudget validationBudget : Nat) :
+    (retagBudget : Nat) :
     CastHooks Provenance (State K U) C (RuntimePlace Provenance) :=
   let place := projection.place
   {
@@ -104,7 +104,7 @@ def hooks [DecidableEq K] (queries : Leaves (State K U) C)
     enforceValidityRecursively := validationRecursive
     validatePlace := fun c dest recursive reset =>
       ValidityVisitor.validatePlace (TypedMachineBindings.bindValidity validity retag retagBudget)
-        c validationBudget dest recursive reset
+        c dest recursive reset
     derefPointer := fun c operand => do let _ ← dereference c operand; pure ()
     checkFunctionPointer := fun _ pointer => do let _ ← FunctionPointers.getPtrFn functions pointer; pure ()
     functionPointer := fun _ callee => return (← FunctionPointers.functionPointer functions (.Instance callee)).withOptionalProvenance

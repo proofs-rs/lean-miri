@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Finite original/control comparisons and mutations of fresh coroutine evidence.
 
-Requires a built coherent schema-16 exporter/native pair and coroutine_native_queries. No builds or flag/budget
+Requires a built coherent schema-17 exporter/native pair and coroutine_native_queries. No builds or flag/budget
 changes are performed. Serialize heavy checks externally with the guest lock.
 """
 import argparse
@@ -135,7 +135,7 @@ def main():
             assert not record["reference_profile_differences"] and not record["lean_profile_differences"], record
             snapshot = Path(record["directory"]) / "input.json"
             document = load_mir_document(snapshot)
-            assert document["schema_version"] == 16
+            assert document["schema_version"] == 17
             coverage = document["compiler_coroutine_coverage"]
             assert coverage["coroutines"] and coverage["auxiliary_bodies"]
             owners = {document["bodies"][row["owner_body"]]["instance_id"] for row in coverage["coroutines"]}

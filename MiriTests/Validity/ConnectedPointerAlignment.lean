@@ -4,6 +4,31 @@ import Miri.Interpreter.ValidityVisitor
 open Miri.ABI Miri.Memory Miri.Interpreter
 open Miri.Interpreter.ValidityMachine
 
+-- Selecting a variant or extracting the scalar data field of a wide pointer
+-- preserves the source type ID, including when rank is zero.
+example (rank : Miri.MIR.TyId → Nat) (parent child : LocalLayout)
+    (same : child.ty = parent.ty)
+    (multiple : parent.layout.variants = .Multiple tag encoding field variants)
+    (single : child.layout.variants = .Single selected) :
+    ValidityVisitor.layoutOrder rank child < ValidityVisitor.layoutOrder rank parent := by
+  cases fields : child.layout.fields <;>
+    simp [ValidityVisitor.layoutOrder,same,multiple,single,fields] <;> omega
+
+example (rank : Miri.MIR.TyId → Nat) (parent child : LocalLayout)
+    (same : child.ty = parent.ty)
+    (pair : parent.layout.fields = .Arbitrary offsets order)
+    (single : child.layout.variants = .Single selected)
+    (scalar : child.layout.fields = .Primitive) :
+    ValidityVisitor.layoutOrder rank child < ValidityVisitor.layoutOrder rank parent := by
+  cases variants : parent.layout.variants <;>
+    simp [ValidityVisitor.layoutOrder,same,pair,single,scalar,variants] <;> omega
+
+example (rank : Miri.MIR.TyId → Nat) (parent child : LocalLayout)
+    (dynamic : parent.layout.isSized = false) (concrete : child.layout.isSized = true) :
+    Prod.Lex (· < ·) (· < ·) (ValidityVisitor.visitOrder rank child) (ValidityVisitor.visitOrder rank parent) := by
+  apply Prod.Lex.left
+  simp [dynamic,concrete]
+
 private def testId : AllocId := ⟨1, by decide⟩
 private def testTag : BorTag := ⟨1, by decide⟩
 
@@ -128,6 +153,7 @@ private def visitorHooks : ValidityVisitor.Hooks Provenance
     projectWrite := fun _ _ _ => missing, writeScalar := fun _ _ _ => missing,
     toOp := fun _ _ => missing, scalarMayBeNull := fun _ _ => missing }
   exact {
+    typeRank := fun _ ty => if ty == 2 then 1 else 0
     target, projection, vtable, discriminant, debugAssertions := false,
     classify := fun _ _ => pure (.reference true),
     unitLayout := fun _ => missing, typeName := fun _ _ => pure "Root",
@@ -167,7 +193,7 @@ def main : IO Unit := do
     refTracking := none, dataBytes := none }
   let root : RuntimePlace Provenance :=
     ⟨.memory ⟨testPointer, .none, none⟩, testLayout Align.ONE⟩
-  let walked := ValidityVisitor.visit visitorHooks () 2 session root testState
+  let walked := ValidityVisitor.visit visitorHooks () (visitorHooks.typeRank testState) session root testState
   check
     (match walked with
       | .error (.undefinedBehavior message) _ =>
@@ -189,11 +215,72 @@ def main : IO Unit := do
   let resolverVisitor := { visitorHooks with
     checkPointerAlignResult := fun _ =>
       ValidityMachine.checkPointerAlignResult resolverAccess }
-  let preserved := ValidityVisitor.visit resolverVisitor () 2 session root testState
+  let preserved := ValidityVisitor.visit resolverVisitor () (resolverVisitor.typeRank testState) session root testState
   check
     (match preserved with
       | .error (.callback "alignment resolver unavailable") state =>
         state.machine.user.symbolicAlignment.size == 1
       | _ => false)
     "checkSafe remapping changed the non-alignment error or discarded its resolver state prefix"
+  -- Three distinct references fit at depth two. The invalid first element is
+  -- visited last by the pointee worklist, after the two valid pointees.
+  let refLayout := testLayout Align.ONE
+  let arrayLayout := { refLayout with ty := 2, layout := { refLayout.layout with
+    fields := .Array (Size.ofBytes 8) 3, size := Size.ofBytes 24 } }
+  let elementLayout := { refLayout with ty := 3 }
+  let hooks := { visitorHooks with
+    classify := fun _ ty => pure (if ty == 2 then .sequence 1 else if ty == 1 then .reference false else .boolean)
+    unitLayout := fun _ => pure refLayout
+    projection := { visitorHooks.projection with
+      layoutOf := fun _ _ => pure refLayout, field := fun _ _ _ => pure refLayout
+      place := { visitorHooks.projection.place with memoryOffset := fun _ base offset _ metadata => do
+        let offset ← match base.ptr.offset.add offset with
+          | .ok value => pure value | .error error => throw (.invalidProgram (reprStr error))
+        pure {base with ptr := {base.ptr with offset}, metadata := metadata} } }
+    readImmediate := fun _ place _ => do
+      let .memory memory := place.ref | missing
+      let scalar ← if place.layout.ty == 1 then
+          pure (Scalar.fromPointer RuntimeTargetDataLayout.default.base
+            (Pointer.new (.concrete testId testTag) memory.ptr.offset))
+        else do
+          modify fun state =>
+            let user := state.machine.user
+            {state with machine := {state.machine with user := {user with
+              symbolicAlignment := user.symbolicAlignment.push (testId,memory.ptr.offset,Align.ONE)}}}
+          match Scalar.fromUInt (BitVec.ofNat 128 (if memory.ptr.offset == Size.ZERO then 2 else 1)) (Size.ofBytes 1) with
+          | .ok value => pure value | .error _ => missing
+      pure ⟨.scalar scalar,place.layout⟩
+    ptrToPlace := fun _ value => do
+      let .scalar scalar := value.imm | missing
+      let .ok ptr := scalar.toPointer RuntimeTargetDataLayout.default.base | missing
+      pure ⟨⟨ptr,.none,none⟩,elementLayout⟩
+    sizeAndAlign := fun _ _ => pure (some (Size.ofBytes 1,Align.ONE))
+    scalarMayBeNull := fun _ _ => pure false
+    checkPointerAlignResult := fun _ _ _ => pure (.ok ())
+    checkPointerAccess := fun _ _ _ => pure (.ok ()) }
+  let arrayRoot : RuntimePlace Provenance :=
+    ⟨.memory ⟨{testPointer with offset := Size.ZERO},.none,none⟩,arrayLayout⟩
+  match ValidityVisitor.validatePlace hooks () arrayRoot true false testState with
+  | .error (.undefinedBehavior message) state =>
+    check (state.machine.user.symbolicAlignment.map (fun entry => entry.2.1.bytes) == #[16,8,0])
+      "tracked pointees did not run in reverse discovery order"
+    check (message.startsWith "validation[0]") s!"unexpected pointee diagnostic: {message}"
+  | _ => throw <| IO.userError "validation failed to reach the invalid third tracked pointee"
+  -- A pattern visits its base at the same byte offset. This exceeds the
+  -- old runner depth of 128 while every static type edge descends.
+  let patternHooks := { hooks with
+    typeRank := fun _ ty => ty
+    classify := fun _ ty => pure (if ty == 0 then .foreign else .pattern (ty-1))
+    projection := { hooks.projection with layoutOf := fun _ ty => pure {refLayout with ty} } }
+  let nested := {arrayRoot with layout := {refLayout with ty := 150}}
+  match ValidityVisitor.validatePlace patternHooks () nested false false testState with
+  | .ok () _ => pure ()
+  | .error error _ => throw <| IO.userError s!"deep pattern validation failed: {reprStr error}"
+  let unionLayout := fun (ty : Nat) =>
+    {refLayout with ty,layout := {refLayout.layout with fields := if ty == 0 then .Primitive else .Union 1}}
+  let unionHooks := { hooks with projection := {hooks.projection with
+    field := fun _ parent _ => pure (unionLayout (parent.ty-1))} }
+  match ValidityVisitor.unionRanges unionHooks () id (unionLayout 150) Size.ZERO .empty testState with
+  | .ok ranges _ => check (ranges.toArray == #[allocRange Size.ZERO refLayout.layout.size]) "deep union byte range mismatch"
+  | .error error _ => throw <| IO.userError s!"deep union traversal failed: {reprStr error}"
   IO.println "Connected pointer alignment check: PASS"

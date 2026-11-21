@@ -21,7 +21,7 @@ class ConnectedCohortTests(unittest.TestCase):
             if 'snapshot_sha256' in entry:
                 raw = gzip.decompress((cohort.CURRENT / f'{ident}.json.gz').read_bytes())
                 self.assertEqual(hashlib.sha256(raw).hexdigest(), entry['snapshot_sha256'])
-                self.assertEqual(json.loads(raw)['schema_version'], 16)
+                self.assertEqual(json.loads(raw)['schema_version'], 17)
         for ident in ('fence-acqrel', 'fence-sc', 'rmw-relaxed', 'rmw-sc'):
             old = json.loads((cohort.HISTORICAL / f'{ident}.observed.json').read_text())
             new = json.loads((cohort.CURRENT / f'{ident}.observed.json').read_text())

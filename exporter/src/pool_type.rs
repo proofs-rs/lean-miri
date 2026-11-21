@@ -4,6 +4,7 @@ use serde::Serialize;
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Type {
     pub type_id: u64,
+    pub validation_rank: usize,
     pub display: String,
     pub shape: Shape,
     pub source_layout: SourceLayout,

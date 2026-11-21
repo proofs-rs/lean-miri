@@ -61,7 +61,7 @@ structure Fields (config : WholeCall.Config) : Prop where
   simp only [ValidityMachine.memoryEnvironment,retain, PlaceMachine.AccessState.mk.injEq]
 
  theorem shallow_unit
-    (h : BodyDictionaries.Visitor) (fuel : Nat) (state : WholeCall.State)
+    (h : BodyDictionaries.Visitor) (state : WholeCall.State)
     (place : MPlaceTy Provenance) (name : String)
     (noGhost : state.machine.user.payload.ghost = false)
     (ghost : @h.withGhostValidation = @ValidityMachine.withGhostValidation MiriMemoryKind CanonicalDictionaries.Stored)
@@ -77,9 +77,9 @@ structure Fields (config : WholeCall.Config) : Prop where
     (padding : h.beginPadding () place Size.ZERO (BodyValidation.active state) = .ok none (BodyValidation.active state))
     (fields : place.layout.layout.fields = .Arbitrary #[] #[])
     (variants : place.layout.layout.variants = .Single 0) (debugOff : h.debugAssertions = false) :
-    ValidityVisitor.validatePlace h () (fuel+1) ⟨.memory place.mplace,place.layout⟩ false true state = .ok () state := by
+    ValidityVisitor.validatePlace h () ⟨.memory place.mplace,place.layout⟩ false true state = .ok () state := by
   let session := {BodyValidation.session name with dataBytes := some .empty}
-  have visited := ValidityVisitor.visit_fieldless h () fuel session ⟨.memory place.mplace,place.layout⟩
+  have visited := ValidityVisitor.visit_fieldless h () (h.typeRank (BodyValidation.active state)) session ⟨.memory place.mplace,place.layout⟩
     (BodyValidation.active state) 0 classify inhabited fields variants rfl debugOff
   have reset := ValidityVisitor.resetPadding_memory_zero h () session place
     (BodyValidation.active state) rfl size dynamic padding
@@ -87,7 +87,7 @@ structure Fields (config : WholeCall.Config) : Prop where
   simp only [ghost,bind,Bind.bind,EStateM.bind,nameQuery,ValidityMachine.withGhostValidation,
     noGhost,Bool.false_eq_true,↓reduceIte]
   simp only [BodyValidation.active,session,BodyValidation.session] at readQuery visited reset
-  simp only [readQuery,pure,Pure.pure,EStateM.pure,visited,reset,bind,Bind.bind,EStateM.bind]
+  simp only [get,getThe,MonadStateOf.get,EStateM.get,readQuery,pure,Pure.pure,EStateM.pure,visited,reset,bind,Bind.bind,EStateM.bind]
   cases state
   simp_all
   rename_i stack machine
@@ -98,9 +98,8 @@ structure Fields (config : WholeCall.Config) : Prop where
     (built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       (Configuration.leaves s.prepared s.options.place.debugAssertions) () (remaining+1) = .ok config)
     (state : WholeCall.State) (place : MPlaceTy Provenance)
-    (layout : place.layout = s.abi.ret.layout) (noGhost : state.machine.user.payload.ghost = false)
-    (fuel : Nat) :
-    ValidityVisitor.validatePlace config.validity () (fuel+1) ⟨.memory place.mplace,place.layout⟩ false true state =
+    (layout : place.layout = s.abi.ret.layout) (noGhost : state.machine.user.payload.ghost = false) :
+    ValidityVisitor.validatePlace config.validity () ⟨.memory place.mplace,place.layout⟩ false true state =
       .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
   have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
@@ -125,7 +124,7 @@ structure Fields (config : WholeCall.Config) : Prop where
     congrArg BodyDictionaries.Queries.debug methods
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
   have sized : place.layout.layout.isSized = true := by rw [layout]; exact metadata.unitSized
-  apply shallow_unit config.validity fuel state place node.display noGhost ghostEq
+  apply shallow_unit config.validity state place node.display noGhost ghostEq
   · rw [nameEq,layout]
     exact BodyQueries.adapter_name _ _ () _ _ node nodeFound
   · exact memory.toMemory place _
@@ -146,7 +145,6 @@ structure Fields (config : WholeCall.Config) : Prop where
 
  theorem validate (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (state : WholeCall.State) (place : MPlaceTy Provenance)
     (layout : place.layout = s.abi.ret.layout)
     (noGhost : state.machine.user.payload.ghost = false)
@@ -161,8 +159,6 @@ structure Fields (config : WholeCall.Config) : Prop where
   obtain ⟨inner,innerBuilt,_⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
     s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   have valid := canonical_unit s metadata profile remaining inner innerBuilt state place layout noGhost
-    (s.options.limits.validation-1)
-  have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
   rw [fields.projection]
   simp only [ValidityMachine.placeHooks,ValidityMachine.compilerPolicy,PlaceMachine.placeHooks]
   rw [fields.validate]
@@ -171,7 +167,6 @@ structure Fields (config : WholeCall.Config) : Prop where
   simp only [ValidityMachine.enforceValidityRecursively,get,getThe,MonadStateOf.get,EStateM.get,
     bind,Bind.bind,EStateM.bind,shallow,pure,Pure.pure,EStateM.pure,
     show (ValidityMachine.ValidationMode.Shallow == .Deep) = false from by decide]
-  rw [budget]
   exact valid
 
  theorem write (s : Static) (metadata : Metadata s) (profile : Profile s)
@@ -215,7 +210,7 @@ structure Fields (config : WholeCall.Config) : Prop where
     get,getThe,MonadStateOf.get,EStateM.get,bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure] using written
 
  theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (state : WholeCall.State) (place : MPlaceTy Provenance)
     (layout : place.layout = s.abi.ret.layout)
     (noMeta : place.mplace.metadata = .none) (aligned : place.mplace.misaligned = none)
@@ -243,7 +238,7 @@ structure Fields (config : WholeCall.Config) : Prop where
       bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,metadata.unitSized,
       Bool.not_true,Bool.false_and,Bool.false_or,Bool.false_eq_true,↓reduceIte,bne_self_eq_false]
     simpa only [layout] using written
-  have valid := validate s metadata profile remaining capacity positive state place layout noGhost shallow
+  have valid := validate s metadata profile remaining capacity state place layout noGhost shallow
   unfold copyRuntimePlace
   simp only [bind,Bind.bind,EStateM.bind,copied]
   simp only [layout,bne_self_eq_false,Bool.false_eq_true,↓reduceIte]

@@ -70,7 +70,7 @@ def config
     (TypedValidityProviders.retagHooks prepared runtime access projection vtable pointers choice base.retag)
   let validity := RuntimeArrayQueries.validityHooks EvalProjectionMachine.arrays
     (TypedValidityProviders.visitor prepared runtime access allocation compiler pointers retag limits.retag validityBase)
-  let (compiler,copy) := ValidityMachine.bindValidation compiler base.copy validity limits.validation
+  let (compiler,copy) := ValidityMachine.bindValidation compiler base.copy validity
   let floats := ExecutionChoiceBindings.floatHooks tape (CompilerExecutionProviders.floatHooks prepared.context base.floats)
   let scalar := CompilerExecutionProviders.machineScalarHooks prepared access pointers dynamic vtable
     projection.dynamicFuel floats (ExecutionMachine.scalarHooks base)
@@ -92,7 +92,7 @@ def config
   let intrinsics := fun callee => Id.run do
     let source := base.intrinsics callee
     let intrinsic := IntrinsicMachine.bind source access allocation deallocation compiler copy pointers
-      dynamic projection.dynamicFuel validity limits.validation
+      dynamic projection.dynamicFuel validity
     let intrinsic := PointerPlaceMachine.bindIntrinsics access pointerCompiler dynamic vtable projection.dynamicFuel intrinsic
     let atomic := ExecutionIntrinsic.Atomic.dispatcher atomics
       source.atomicHooks.orderingConst source.atomicHooks.volatileConst

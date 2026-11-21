@@ -38,13 +38,13 @@ def bindValidation [DecidableEq K]
     (compiler : PlaceMachine.CompilerHooks K User C)
     (copy : PlaceCopyHooks Provenance (State K User) C)
     (visitor : ValidityVisitor.Hooks Provenance (State K User) C MachineHooks.FrameExtra F A Padding)
-    (retag : TypedRetag.Hooks K User) (retagBudget validationBudget : Nat)
+    (retag : TypedRetag.Hooks K User) (retagBudget : Nat)
     (recursive : C → LocalLayout → M K User Bool) :
     PlaceMachine.CompilerHooks K User C × PlaceCopyHooks Provenance (State K User) C :=
   let visitor := bindValidity visitor retag retagBudget
   let validate := fun c (place : RuntimePlace Provenance) => do
     let recursively ← recursive c place.layout
-    ValidityVisitor.validatePlace visitor c validationBudget place recursively true
+    ValidityVisitor.validatePlace visitor c place recursively true
   ({ compiler with validate },
    { copy with validateSource := fun c source dest => do
       if !source.layout.isSized || !dest.layout.layout.isSized || source.layout.size != dest.layout.layout.size then

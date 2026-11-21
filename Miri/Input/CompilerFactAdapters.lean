@@ -152,6 +152,7 @@ def castHooks (prepared : Prepared) (machine : CastHooks P S C V) : CastHooks P 
 
 def validityHooks (prepared : Prepared) (machine : ValidityVisitor.Hooks P S C E Fn Abi Pad) : ValidityVisitor.Hooks P S C E Fn Abi Pad :=
   { machine with
+    typeRank := fun state ty => ((prepared.context.runtime.source.types[ty]?).map (·.validationRank)).getD (machine.typeRank state ty)
     classify := fun _ ty => lift (validityKind prepared ty)
     metadataTail := fun _ ty => lift (metadataTail prepared ty)
     unitLayout := fun _ => lift (CompilerFacts.unitLayout prepared.context)

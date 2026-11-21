@@ -14,7 +14,7 @@ set_option maxHeartbeats 2500000
 set_option linter.unusedSimpArgs false
 
 theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacityEq : s.capacity = remaining+2) (validation : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacityEq : s.capacity = remaining+2)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (destination : InputDraft.LocalDestination s p input.tracker) (offset : Size)
     (projected : destination.offset = some offset) (value : Immediate Provenance)
@@ -130,12 +130,12 @@ theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
         rw [allocationUninit,←ctx.2.2.2.2.1]
       have createdEq := allocationEq
       rw [←machineEq] at createdEq
-      exact ProjectedUninitCopy.from_allocation s metadata profile remaining capacityEq validation older frame machine writtenMachine movedMachine
+      exact ProjectedUninitCopy.from_allocation s metadata profile remaining capacityEq older frame machine writtenMachine movedMachine
         destination.localId slot destination.baseLayout boundCurrent atSlot (uninit ▸ live) rfl destination.baseSized
         id tag base offset createdEq moved footprint within destination.baseSigned noClocks ghostMoved shallowMoved
     · have writtenEq : (ValidityMachine.placeHooks s.cfg.access s.cfg.allocation s.cfg.compiler).writeMemoryNoValidate () value parent
           (LocalUnit.current older frame post.machine) = .ok () (LocalUnit.current older frame writtenMachine) := written
-      exact ProjectedImmediateCopy.from_write s metadata profile remaining capacityEq validation older frame machine post.machine
+      exact ProjectedImmediateCopy.from_write s metadata profile remaining capacityEq older frame machine post.machine
         writtenMachine movedMachine destination.localId slot destination.baseLayout value initialized boundCurrent atSlot live rfl
         destination.baseSized id tag base offset allocationEq writtenEq moved footprint within destination.baseSigned noClocks ghostMoved shallowMoved
   exact Or.inr ⟨_,_,copied⟩

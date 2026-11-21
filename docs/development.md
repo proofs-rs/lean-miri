@@ -11,7 +11,7 @@ flock, a C compiler and Rustup/Cargo. Install Rustup/Cargo under `.cargo/bin/`
 Lean is pinned to `leanprover/lean4:v4.35.0` in `lean-toolchain`, Miri to
 `93c45edea8b148a6b6f05ec9384449a04217143f`, and rustc to
 `8eb778d04094d3af4b26580cab327e0413eb1e02`.
-Fresh exports use schema 16; earlier execution inputs require fresh export.
+Fresh exports use schema 17; earlier execution inputs require fresh export.
 `tools/check-upstream-sync.sh --skip-build --output scratch/upstream-sync`
 runs original upstream Rust controls for the changed semantics with same-TyCtxt
 references. `python3 tests/upstream_sync/check.py --output scratch/sync-controls`

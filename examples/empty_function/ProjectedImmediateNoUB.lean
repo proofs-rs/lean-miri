@@ -36,7 +36,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
     rcases total with first | ⟨reason,failed⟩
     · have firstRaw := first
       rw [←entrySame] at firstRaw
-      obtain ⟨remaining,capacity,validation,successor⟩ := BodyTotal.of_success s metadata profile frames entry machine
+      obtain ⟨remaining,capacity,successor⟩ := BodyTotal.of_success s metadata profile frames entry machine
         identity body function location noClocks noGhost shallow _ firstRaw
       let frame : LocalUnit.F := {BodyStep.withUnit entry .uninit (some s.abi.ret.layout) with location := .mir ⟨0,1⟩}
       have machineEq : machine = ProjectedModel.initializedMachine s p input.tracker destination older bound frame previous := by
@@ -73,7 +73,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
       have copy : OrdinaryReturnNoUB.CopyOutcome s older caller frame popped := by
         unfold OrdinaryReturnNoUB.CopyOutcome
         rw [frameReturn]
-        exact ProjectedReturnTotal.copy s metadata profile remaining capacity validation p runtime input destination
+        exact ProjectedReturnTotal.copy s metadata profile remaining capacity p runtime input destination
           offset projected value old older bound frame previous index
       obtain ⟨unwind,contFrame⟩ : ∃ unwind, frame.returnContinuation = .goto (some p.returnBlock) unwind := by
         change ∃ unwind, entry.returnContinuation = .goto (some p.returnBlock) unwind

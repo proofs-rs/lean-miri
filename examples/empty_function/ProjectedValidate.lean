@@ -10,7 +10,7 @@ set_option maxHeartbeats 1000000
 set_option linter.unusedSimpArgs false
 
 theorem concrete (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F) (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (localId : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (base : LocalLayout)
     (place : MemPlace Provenance) (id : AllocId) (tag : BorTag) (amount : Size)
@@ -27,6 +27,6 @@ theorem concrete (s : Static) (metadata : Metadata s) (profile : Profile s)
   have inbounds := ProjectedInbounds.source s metadata (BodyValidation.active state) place id tag concrete
     base.layout.size amount activeFoot within signed
   have wrapping := ProjectionWrapping.source s metadata (BodyValidation.active state) place amount
-  exact ProjectedIndirectValidation.validate_projected s metadata profile remaining capacity positive frames frame machine
+  exact ProjectedIndirectValidation.validate_projected s metadata profile remaining capacity frames frame machine
     localId slot base place _ amount atSlot live cache noClocks noGhost shallow inbounds wrapping
 end EmptyFunction.ProjectedValidate

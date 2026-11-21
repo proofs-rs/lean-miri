@@ -73,7 +73,7 @@ def call {Os R P H D O Aff B Poll Instant System N Profiler C Code F A Pad : Typ
     (validity : ValidityVisitor.Hooks Provenance
       (EvalNativeMachine.S Os R P H D O Aff B Poll Instant System N Profiler)
       C MachineHooks.FrameExtra F A Pad)
-    (validationBudget reachabilityBudget : Nat) (choice : C) (fuel : Nat)
+    (reachabilityBudget : Nat) (choice : C) (fuel : Nat)
     (name : String) (destination : RuntimePlace Provenance)
     (arguments : Array (OpTy Provenance)) :
     NativeMachine.M MiriMemoryKind
@@ -85,7 +85,7 @@ def call {Os R P H D O Aff B Poll Instant System N Profiler C Code F A Pad : Typ
     let some raw := raw
       | throw (.unsupported "native source symbol/FFI backend is unavailable")
     EvalNativeMachine.call (effects hostBits lifecycleBacking p arrays raw) access pointers validity
-      validationBudget reachabilityBudget choice fuel name destination
+      reachabilityBudget choice fuel name destination
       (arguments.map FnArg.Copy)
 
 end Miri.Input.EvalNativeSourceConstruction

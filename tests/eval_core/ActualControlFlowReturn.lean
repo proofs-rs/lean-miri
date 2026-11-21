@@ -38,7 +38,7 @@ private def checkedState {S A : Type} (result : StepResult S A) : Except String 
 
 private def options : CoreOptions := {
   place := {debugAssertions := false, dynamicFuel := 256, validation := .Shallow}
-  limits := {callDispatch := 128, casts := 128, retag := 128, validation := 128}
+  limits := {callDispatch := 128, casts := 128, retag := 128}
   compatibilityBudget := 128, varArgsBudget := 128, callbackCapacity := 128
   floatNondeterministic := false, weakFailureRate := 0, crossCrateInlineAlways := false
   userRelevantCrates := #[], ignoreOptionalOverflowChecks := false, panicUnwinds := true

@@ -58,9 +58,9 @@ def call (effects : Effects (U Os R P H D O Aff B Poll Instant System N Profiler
     (access : ValidityMachine.Access MiriMemoryKind (U Os R P H D O Aff B Poll Instant System N Profiler))
     (pointers : PointerMachine.Hooks MiriMemoryKind (ValidityMachine.Control (U Os R P H D O Aff B Poll Instant System N Profiler)))
     (validity : ValidityVisitor.Hooks Provenance (S Os R P H D O Aff B Poll Instant System N Profiler) C MachineHooks.FrameExtra F A Pad)
-    (validationBudget reachabilityBudget : Nat) (choice : C) (fuel : Nat)
+    (reachabilityBudget : Nat) (choice : C) (fuel : Nat)
     (name : String) (dest : RuntimePlace Provenance) (args : Array (FnArg Provenance)) :
     NativeMachine.M MiriMemoryKind (U Os R P H D O Aff B Poll Instant System N Profiler) Bool :=
-  NativeMachine.call (host effects) access pointers validity validationBudget reachabilityBudget
+  NativeMachine.call (host effects) access pointers validity reachabilityBudget
     choice fuel name dest (args.map FnArg.copyFnArg)
 end Miri.Input.EvalNativeMachine

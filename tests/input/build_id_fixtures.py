@@ -18,7 +18,7 @@ EXPORTS = ROOT / "tests/input/fixtures"
 def write(name, value):
     if isinstance(value, dict) and value.get("schema") == "lean-miri-rustc-mir":
         version = value["schema_version"]
-        value["schema_version"] = 16
+        value["schema_version"] = 17
         value = pool_document(value)
         if version != 16:
             value["schema_version"] = version

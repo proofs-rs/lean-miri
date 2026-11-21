@@ -92,7 +92,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
       rcases total with first | ⟨reason,failed⟩
       · have firstRaw := first
         rw [←entrySame] at firstRaw
-        obtain ⟨remaining,capacity,validation,successor⟩ := BodyTotal.of_success s metadata profile frames frame changed
+        obtain ⟨remaining,capacity,successor⟩ := BodyTotal.of_success s metadata profile frames frame changed
           identity body function location noClocks noGhost shallow _ firstRaw
         let middleFrame : LocalUnit.F := {BodyStep.withUnit frame .uninit (some s.abi.ret.layout) with location := .mir ⟨0,1⟩}
         let middle := LocalUnit.current frames middleFrame changed
@@ -125,7 +125,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
         have place : middleFrame.returnPlace = .memory destination.place := by
           change entry.frame.returnPlace = .memory destination.place
           exact entry.returnPlace.trans destination.encoding
-        have copy := OrdinaryCopyNoUB.memory_outcome s metadata profile remaining capacity validation older input.caller
+        have copy := OrdinaryCopyNoUB.memory_outcome s metadata profile remaining capacity older input.caller
           middleFrame popped destination.place place destination.layout destination.sizedMetadata destination.alignmentCache noGhostPop shallowPop
         obtain ⟨unwind,continuation⟩ : ∃ unwind, middleFrame.returnContinuation = .goto (some p.returnBlock) unwind := by
           change ∃ unwind, entry.frame.returnContinuation = .goto (some p.returnBlock) unwind

@@ -115,12 +115,6 @@ whole-domain theorem may split on the actual result rather than assume room. -/
     RunLoop.reportsUB (ValidityVisitor.classifyRetagError path kind
       (.invalidProgram reason)) = false := rfl
 
- theorem validity_zero {P S C E F A Pad : Type} [PointerProvenance P] [DecidableEq P]
-    (h : ValidityVisitor.Hooks P S C E F A Pad) (choice : C)
-    (session : ValidityVisitor.Session P) (place : RuntimePlace P) (state : S) :
-    ValidityVisitor.visit h choice 0 session place state =
-      .error (.resourceExhaustion "validity traversal fuel") state := rfl
-
  theorem dynamic_zero {P S C : Type} [PointerProvenance P]
     (h : DynamicLayoutHooks P S C) (choice : C) (metadataValue : MemPlaceMeta P)
     (layout : TyAndLayout MIR.TyId) (unsized : layout.layout.isSized = false) (state : S) :

@@ -21,7 +21,7 @@ def session (name : String) : ValidityVisitor.Session Provenance := {
 
 theorem shallow_fieldless
     (h : ValidityVisitor.Hooks Provenance (ValidityMachine.State K U) C MachineHooks.FrameExtra F A Pad)
-    (choice : C) (fuel : Nat) (state : ValidityMachine.State K U)
+    (choice : C) (state : ValidityMachine.State K U)
     (place : RuntimePlace Provenance) (name : String)
     (noGhost : state.machine.user.payload.ghost = false)
     (ghost : @h.withGhostValidation = @ValidityMachine.withGhostValidation K U)
@@ -34,14 +34,14 @@ theorem shallow_fieldless
     (fields : place.layout.layout.fields = .Arbitrary #[] #[])
     (variants : place.layout.layout.variants = .Single 0)
     (debugOff : h.debugAssertions = false) :
-    ValidityVisitor.validatePlace h choice (fuel+1) place false true state = .ok () state := by
-  have visited := ValidityVisitor.visit_fieldless h choice fuel (session name) place (active state)
+    ValidityVisitor.validatePlace h choice place false true state = .ok () state := by
+  have visited := ValidityVisitor.visit_fieldless h choice (h.typeRank (active state)) (session name) place (active state)
     0 classify inhabited fields variants rfl debugOff
   unfold ValidityVisitor.validatePlace
   simp only [ghost, bind, Bind.bind, EStateM.bind, nameQuery,
     ValidityMachine.withGhostValidation, noGhost, Bool.false_eq_true, ↓reduceIte]
   simp only [active, session] at readQuery visited
-  simp only [readQuery, pure, Pure.pure, EStateM.pure, visited,
+  simp only [get,getThe,MonadStateOf.get,EStateM.get,readQuery, pure, Pure.pure, EStateM.pure, visited,
     ValidityVisitor.resetPadding_no_ranges,
     bind, Bind.bind, EStateM.bind]
   cases state

@@ -14,7 +14,6 @@ set_option linter.unusedSimpArgs false
 
  theorem validate_unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (noClocks : frame.extra.dataRace = none)
@@ -32,10 +31,9 @@ set_option linter.unusedSimpArgs false
   obtain ⟨inner, innerBuilt, _⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
     s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
-  have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
   have valid := BodyCanonicalValidation.unit s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction inner innerBuilt frames frame machine s.abi.ret.layout
-    (s.options.limits.validation-1) profile.debug metadata.unitSized noClocks noGhost
+    profile.debug metadata.unitSized noClocks noGhost
     metadata.unitKind node nodeFound metadata.unitInhabited metadata.unitFields metadata.unitVariants
   rw [fields.projection]
   simp only [ValidityMachine.placeHooks, ValidityMachine.compilerPolicy, PlaceMachine.placeHooks]
@@ -45,12 +43,10 @@ set_option linter.unusedSimpArgs false
   simp only [ValidityMachine.enforceValidityRecursively, BodyStep.current, LocalUnit.current,
     get, getThe, MonadStateOf.get, EStateM.get, bind, Bind.bind, EStateM.bind,
     shallow, show (ValidityMachine.ValidationMode.Shallow == .Deep) = false from by decide, beq_self_eq_true, pure, Pure.pure, EStateM.pure]
-  rw [budget]
   simpa only [BodyStep.current, LocalUnit.current] using valid
 
  theorem unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (noClocks : frame.extra.dataRace = none)
@@ -78,7 +74,7 @@ set_option linter.unusedSimpArgs false
   have written := BodyStep.copy_zero_no_validate s.cfg.access s.cfg.allocation s.cfg.compiler s.cfg.copy ()
     frames frame machine s.abi.ret.layout metadata.unitSized (dictionaries.debug.trans profile.debug)
     (dictionaries.debugAbi profile.debug) compatible padding noClocks
-  have valid := validate_unit s metadata profile remaining capacity positive frames frame machine noClocks noGhost shallow
+  have valid := validate_unit s metadata profile remaining capacity frames frame machine noClocks noGhost shallow
   rw [source.projection] at valid ⊢
   unfold copyRuntimePlace
   simp only [bind, Bind.bind, EStateM.bind, written]

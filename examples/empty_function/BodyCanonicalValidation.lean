@@ -17,7 +17,7 @@ set_option linter.unusedSimpArgs false
     (built : EvalConfigurationCore.make p image bytes options leaves () (remaining+1) = .ok config)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser) (layout : LocalLayout)
-    (fuel : Nat) (debugOff : options.place.debugAssertions = false)
+    (debugOff : options.place.debugAssertions = false)
     (sized : layout.layout.isSized = true) (noClocks : frame.extra.dataRace = none)
     (noGhost : machine.user.payload.ghost = false)
     (kind : CompilerFactAdapters.validityKind p.lifecycle.calls.symbols.facts layout.ty =
@@ -26,7 +26,7 @@ set_option linter.unusedSimpArgs false
     (inhabited : CompilerFacts.boolean p.lifecycle.calls.symbols.facts.context layout.ty "opsem_inhabited" = .ok true)
     (fields : layout.layout.fields = .Arbitrary #[] #[])
     (variants : layout.layout.variants = .Single 0) :
-    ValidityVisitor.validatePlace config.validity () (fuel+1) (BodyStep.destination frames frame layout) false true
+    ValidityVisitor.validatePlace config.validity () (BodyStep.destination frames frame layout) false true
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some layout)) machine) =
       .ok () (BodyStep.current frames (BodyStep.withUnit frame .uninit (some layout)) machine) := by
   have methods := BodyDictionaries.fields_of_make p image bytes options leaves remaining contract config built
@@ -45,7 +45,7 @@ set_option linter.unusedSimpArgs false
     congrArg (fun q => @q.ghost) methods
   have debugEq : config.validity.debugAssertions = options.place.debugAssertions :=
     congrArg BodyDictionaries.Queries.debug methods
-  apply BodyValidation.shallow_fieldless config.validity () fuel _ _ node.display noGhost ghostEq
+  apply BodyValidation.shallow_fieldless config.validity () _ _ node.display noGhost ghostEq
   · rw [nameEq]
     exact BodyQueries.adapter_name _ _ () _ _ node nodeFound
   · have read := BodyDictionaries.read_of_make p image bytes options leaves remaining contract config built

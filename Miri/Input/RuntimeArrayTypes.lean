@@ -24,6 +24,7 @@ structure Entry where
   key : Key
   value : TyAndLayout TypeId
   origin : Origin
+  validationRank : Nat
 structure World where
   metadata : RuntimeMetadata
   byteLayout : TyAndLayout TypeId
@@ -81,6 +82,10 @@ private def elementLayout (world : World) : Element → Except Error (TyAndLayou
     unless element.layout.isSized do throw (.metadata "source array element requires a sized type")
     pure element
 
+def typeRank (world : World) (id : TypeId) : Nat :=
+  if let some source := world.metadata.source.types[id]? then source.validationRank
+  else ((world.entries.find? (·.value.ty == id)).map (·.validationRank)).getD 0
+
 /-- Seed exact constructor aliases before computing any layouts. Layout failures
 in unrelated compiler catalog entries do not turn World creation into execution
 of those types; requesting their constructors still fails explicitly. -/
@@ -119,7 +124,7 @@ def create (runtime : RuntimeMetadata) : Except Error World := do
         if let .ok computed := computed then
           if let .ok imported := runtime.lookup id then
             unless imported.layout == computed do throw (.compilerLayoutMismatch id)
-          world := {world with entries := world.entries.push ⟨key,⟨id,computed⟩,.compiler id⟩}
+          world := {world with entries := world.entries.push ⟨key,⟨id,computed⟩,.compiler id,typeRank world id⟩}
   for (_,id) in world.aliases do
     unless world.entries.any (·.value.ty == id) do
       world := {world with obligations := world.obligations.push s!"type {id}: canonical array requires unresolved element layout or overflows target bound"}
@@ -136,7 +141,8 @@ def intern (world : World) (element : Element) (count : UInt64) :
     | element => element
   let key : Key := ⟨element,count⟩
   if let some prior := world.entries.find? (·.key == key) then return (prior.value,world)
-  let layout ← calculate world.metadata.target (← elementLayout world element).layout count
+  let child ← elementLayout world element
+  let layout ← calculate world.metadata.target child.layout count
   let (id,origin,next) ← match world.aliases.find? (·.1 == key) with
     | some (_,id) => pure (id,Origin.compiler id,world.nextId)
     | none => do
@@ -145,7 +151,7 @@ def intern (world : World) (element : Element) (count : UInt64) :
       pure (world.nextId,Origin.runtimeConstructor,world.nextId + 1)
   let result : TyAndLayout TypeId := ⟨id,layout⟩
   let updated := { world with
-    entries := world.entries.push ⟨key,result,origin⟩
+    entries := world.entries.push ⟨key,result,origin,typeRank world child.ty + 1⟩
     nextId := next }
   pure (result,updated)
 

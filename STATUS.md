@@ -384,6 +384,15 @@ callers typecheck locally, including the connected proof harness. The retained
 startup replay, fresh atomic handoff, and the `no_core` and `socket-unix` UI
 comparisons pass.
 
+Runtime and const validity traversal use the by-value type ranks checked at
+schema-17 import. The Lean visitor orders same-type variant and scalar
+projections by layout form and dynamic unpack by sizedness. Its termination
+proof checks the actual child returned by an effectful projection against that
+order. A non-descending result is an explicit invalid-program error. General
+correspondence of every projection hook with the checked source edges remains
+a separate proof obligation. Local checks include depth-150 pattern and union
+walks, malformed import ranks, the current connected cohort and dyn upcasts.
+
 Raw-pointer validity now uses rustc's trivial `Sized` rule for array pointees
 before demanding a layout. The local upstream UI comparison passes
 `too-big-type-behind-raw-ptr`; `too-big-slice` and `wrong-dyn-trait` still reach

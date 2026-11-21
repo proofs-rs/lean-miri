@@ -20,7 +20,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure]
 
  theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array LocalUnit.F) (caller : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser) (id : MIR.LocalId)
     (slot : LocalState Provenance LocalLayout) (memory : MemPlace Provenance) (atSlot : caller.locals[id]? = some slot)
@@ -42,7 +42,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     simp [CompilerCopy.hasPadding,metadata.unitBackend,pure,Except.pure]
   have eq := bound_copy s s.abi.ret.layout (LocalIndirectReturnCopy.destination older caller id s.abi.ret.layout)
     rfl compatible padding metadata.unitSized
-  have safe := LocalIndirectReturnCopy.unit s metadata profile remaining capacity positive older caller machine
+  have safe := LocalIndirectReturnCopy.unit s metadata profile remaining capacity older caller machine
     id slot memory atSlot live cache noClocks noMeta aligned noGhost shallow
   change MachineHooks.run (copyRuntimePlace _ _ () _ _ true) (LocalUnit.current older caller machine) = _
   simp only [RuntimeStackPlace.toRuntimePlace]

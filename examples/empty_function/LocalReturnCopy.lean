@@ -148,7 +148,7 @@ private theorem write_optimized (frames : Array F) (frame : F)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout)
     (atSlot : frame.locals[id]?=some slot) (live : slot.value=.live (.immediate .uninit))
     (cache : slot.layout=some layout)
-    (fuel : Nat) (debugOff : options.place.debugAssertions = false)
+    (debugOff : options.place.debugAssertions = false)
     (sized : layout.layout.isSized = true) (noClocks : frame.extra.dataRace = none)
     (noGhost : machine.user.payload.ghost = false)
     (kind : CompilerFactAdapters.validityKind p.lifecycle.calls.symbols.facts layout.ty =
@@ -157,7 +157,7 @@ private theorem write_optimized (frames : Array F) (frame : F)
     (inhabited : CompilerFacts.boolean p.lifecycle.calls.symbols.facts.context layout.ty "opsem_inhabited" = .ok true)
     (fields : layout.layout.fields = .Arbitrary #[] #[])
     (variants : layout.layout.variants = .Single 0) :
-    ValidityVisitor.validatePlace config.validity () (fuel+1) (destination frames frame id layout) false true
+    ValidityVisitor.validatePlace config.validity () (destination frames frame id layout) false true
       (LocalUnit.current frames frame machine) =
       .ok () (LocalUnit.current frames frame machine) := by
   have methods := BodyDictionaries.fields_of_make p image bytes options leaves remaining contract config built
@@ -176,7 +176,7 @@ private theorem write_optimized (frames : Array F) (frame : F)
     congrArg (fun q => @q.ghost) methods
   have debugEq : config.validity.debugAssertions = options.place.debugAssertions :=
     congrArg BodyDictionaries.Queries.debug methods
-  apply BodyValidation.shallow_fieldless config.validity () fuel _ _ node.display noGhost ghostEq
+  apply BodyValidation.shallow_fieldless config.validity () _ _ node.display noGhost ghostEq
   · rw [nameEq]
     exact BodyQueries.adapter_name _ _ () _ _ node nodeFound
   · have read := read_of_make p image bytes options leaves remaining contract config built
@@ -217,7 +217,6 @@ theorem copy_no_validate [DecidableEq K] (access : ValidityMachine.Access K U)
 
  theorem validate_unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout)
@@ -238,10 +237,9 @@ theorem copy_no_validate [DecidableEq K] (access : ValidityMachine.Access K U)
   obtain ⟨inner, innerBuilt, _⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
     s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
-  have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
   have valid := canonical_unit s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction inner innerBuilt frames frame machine s.abi.ret.layout id slot atSlot live cache
-    (s.options.limits.validation-1) profile.debug metadata.unitSized noClocks noGhost
+    profile.debug metadata.unitSized noClocks noGhost
     metadata.unitKind node nodeFound metadata.unitInhabited metadata.unitFields metadata.unitVariants
   rw [fields.projection]
   simp only [ValidityMachine.placeHooks, ValidityMachine.compilerPolicy, PlaceMachine.placeHooks]
@@ -251,12 +249,10 @@ theorem copy_no_validate [DecidableEq K] (access : ValidityMachine.Access K U)
   simp only [ValidityMachine.enforceValidityRecursively, LocalUnit.current,
     get, getThe, MonadStateOf.get, EStateM.get, bind, Bind.bind, EStateM.bind,
     shallow, show (ValidityMachine.ValidationMode.Shallow == .Deep) = false from by decide, beq_self_eq_true, pure, Pure.pure, EStateM.pure]
-  rw [budget]
   simpa only [LocalUnit.current] using valid
 
  theorem unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout)
@@ -287,7 +283,7 @@ theorem copy_no_validate [DecidableEq K] (access : ValidityMachine.Access K U)
   have written := copy_no_validate s.cfg.access s.cfg.allocation s.cfg.compiler s.cfg.copy ()
     frames frame machine id slot atSlot live s.abi.ret.layout metadata.unitSized (dictionaries.debug.trans profile.debug)
     (dictionaries.debugAbi profile.debug) compatible padding noClocks
-  have valid := validate_unit s metadata profile remaining capacity positive frames frame machine id slot atSlot live cache noClocks noGhost shallow
+  have valid := validate_unit s metadata profile remaining capacity frames frame machine id slot atSlot live cache noClocks noGhost shallow
   rw [source.projection] at valid ⊢
   unfold copyRuntimePlace
   simp only [bind, Bind.bind, EStateM.bind, written]
@@ -301,7 +297,6 @@ theorem copy_no_validate [DecidableEq K] (access : ValidityMachine.Access K U)
 
  theorem unit_allow (s : Static) (metadata : Metadata s) (profile : Profile s)
     (allowTransmute : Bool) (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout)
@@ -314,7 +309,7 @@ theorem copy_no_validate [DecidableEq K] (access : ValidityMachine.Access K U)
       (destination frames frame id s.abi.ret.layout) allowTransmute
       (LocalUnit.current frames frame machine) =
       .ok () (LocalUnit.current frames frame machine) := by
-  have base := unit s metadata profile remaining capacity positive frames frame machine id slot atSlot live cache noClocks noGhost shallow
+  have base := unit s metadata profile remaining capacity frames frame machine id slot atSlot live cache noClocks noGhost shallow
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
   have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by

@@ -29,7 +29,6 @@ structure Limits where
   callDispatch : Nat
   casts : Nat
   retag : Nat
-  validation : Nat
 structure Config (K User C Other Extern Host : Type) where
   access : PlaceMachine.AccessConfig K User
   allocation : PlaceMachine.AllocationConfig K User
@@ -96,7 +95,7 @@ def withValidation [DecidableEq K] (h : Config K U C O X Host) (limits : Limits)
     memoryCopy := GlobalMemoryCopyMachine.typedCopy h.access h.addresses h.arithmetic
       h.projection.dynamic h.projection.dynamicFuel h.compiler.debugAssertions}
   let (compiler,copy) := TypedMachineBindings.bindValidation h.compiler copy h.validity retag
-    limits.retag limits.validation h.validationRecursive
+    limits.retag h.validationRecursive
   {h with compiler,copy,retag}
 
 private def operandBase (h : Config K U C O X Host) : OperandMachine.Hooks K U C where
@@ -158,7 +157,7 @@ def castHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
     CastHooks Provenance (State K U) C Value :=
   ExecutionCast.hooks h.casts h.access h.allocation h.compiler (projectionHooks h) h.copy
     h.retag h.validity h.functions h.floats h.operands.dereference
-    (OperandMachine.field (operandHooks h)) h.validationRecursive limits.retag limits.validation
+    (OperandMachine.field (operandHooks h)) h.validationRecursive limits.retag
 
 /-- Core expression dictionaries. Genuine compiler type/layout predicates and
 host/platform leaves in base records survive; operational actions are replaced. -/
@@ -257,7 +256,7 @@ private def intrinsicHooks [DecidableEq K] (h : Config K U C O X Host) (limits :
     enforceValidityRecursively := h.validationRecursive
     validatePlace := fun c dest recursive reset =>
       ValidityVisitor.validatePlace (TypedMachineBindings.bindValidity h.validity h.retag limits.retag)
-        c limits.validation dest recursive reset
+        c dest recursive reset
     writeBytes := fun _ pointer value size => RawMemoryMachine.writeRepeatedByte h.access h.arithmetic pointer value size.bytes
     readBytesStripProvenance := fun _ pointer size => do
       return (← RawMemoryMachine.readBytes h.access h.arithmetic pointer size.bytes).data

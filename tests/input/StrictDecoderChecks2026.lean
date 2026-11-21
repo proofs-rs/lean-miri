@@ -42,6 +42,14 @@ def main : IO Unit := do
     throw (IO.userError "typed table definitions were discarded")
   let types ← must (array (← must (get fixture "types")))
   let some firstType := types[0]? | throw (IO.userError "fixture has no type")
+  let childTuple := object [("kind",string "tuple"),("elements","[1]")]
+  let parent ← must (set firstType "shape" childTuple)
+  let invalidRank ← must (set fixture "types" (arr (types.set! 0 parent)))
+  match decodeJson invalidRank with
+  | .error message =>
+    unless message.contains "validation rank does not decrease" do
+      throw (IO.userError s!"unexpected rank diagnostic: {message}")
+  | .ok _ => throw (IO.userError "accepted a non-descending tuple field")
   let oversizedArray := object [("kind",string "array"),("element","0"),("length","0"),
     ("constructor_identity",object [("count",toString (2^64 : Nat)),("canonical_value_constructor","true")])]
   -- These complete rows must fail at the parser, before any table-wide join.

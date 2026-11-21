@@ -56,8 +56,13 @@ prove termination when fresh concrete instantiations keep appearing.
 
 ## Source input
 
-The producer and reader use `lean-miri-rustc-mir` schema 16. Earlier versions
-require fresh export. The execution document contains no layout, FnAbi or
+The producer and reader use `lean-miri-rustc-mir` schema 17. Earlier versions
+require fresh export. Each type carries a `validation_rank`. At import, Lean
+checks that normalization and by-value children descend. References do not add
+their pointee as a by-value child. The validity visitor orders a selected enum
+variant before its enclosing enum and a synthetic scalar field before a wide
+pointer of the same type. Unpacking a dynamic place starts a sized traversal.
+The execution document contains no layout, FnAbi or
 covariance answer tables. Table IDs are dense and local to one document;
 allocation source IDs retain a separate raw identity. Source spans include the source-map
 expansion position used by caller-location intrinsics, and session material
@@ -204,6 +209,6 @@ Run Rust units and exporter fixture suites with the pinned environment:
 Lean integration and theorem checks are separate. `tools/check-empty-function.sh`
 checks concrete providers for its fixture and then the kernel theorem/axiom
 closure. [STATUS.md](../STATUS.md) records current validation gaps; historical
-fixture and CI successes do not establish schema-16 execution. Whole-pipeline
+fixture and CI successes do not establish schema-17 execution. Whole-pipeline
 performance comparisons use identical Rust inputs and fixed artifacts via
 `tools/measure-pipeline.py`, as described in [PROFILING](../tools/PROFILING.md).

@@ -43,6 +43,7 @@ must still execute. readBytes strips provenance and checks initialization; it
 must not validate UTF-8 (source str validity only checks bytes). beginPadding
 obtains mutable allocation access once, followed by writePadding per gap. -/
 structure Hooks (P S C E Fn ABI Padding : Type) where
+  typeRank : S → MIR.TyId → Nat
   target : RuntimeTargetDataLayout
   projection : PlaceProjectionHooks P S C E
   vtable : VTableHooks P S C Fn ABI
@@ -240,18 +241,30 @@ private def checkSafe [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F
         session := {session with refTracking := some tracker}
   return session
 
+/-- A selected variant and a synthetic scalar field may retain the parent's
+type ID. They precede the corresponding enum or aggregate layout. -/
+def layoutOrder (typeRank : MIR.TyId → Nat) (place : LocalLayout) : Nat :=
+  let phase := match place.layout.variants,place.layout.fields with
+    | .Multiple ..,_ => 2
+    | _,.Primitive => 0
+    | _,_ => 1
+  3 * typeRank place.ty + phase
+
 /-- Data-byte union layout walk. It traverses compiler layouts, never reads an
 active union field, and preserves the source scalar-array fast path. -/
-def unionRanges (h : Hooks P S C E F A Pad) (c : C) : Nat → LocalLayout → Size → DataRangeSet → M S DataRangeSet
-  | 0, _, _, _ => throw (.resourceExhaustion "union layout traversal fuel")
-  | fuel+1, layout, base, initial => do
+def unionRanges (h : Hooks P S C E F A Pad) (c : C) (typeRank : MIR.TyId → Nat)
+    (layout : LocalLayout) (base : Size) (initial : DataRangeSet) : M S DataRangeSet := do
+    let descend (child : LocalLayout) (offset : Size) (ranges : DataRangeSet) := do
+      if smaller : layoutOrder typeRank child < layoutOrder typeRank layout then
+        unionRanges h c typeRank child offset ranges
+      else throw (.invalidProgram "union layout projection does not descend")
     if layout.layout.isZst then return initial
     let mut ranges := initial
     match layout.layout.fields with
     | .Primitive => ranges ← rangeResult (ranges.addRange base layout.layout.size)
     | .Union count =>
       for field in [:count] do
-        ranges ← unionRanges h c fuel (← h.projection.field c layout field) base ranges
+        ranges ← descend (← h.projection.field c layout field) base ranges
     | .Array stride count =>
       let element ← h.projection.field c layout 0
       if element.layout.backendRepr.isScalar then
@@ -259,15 +272,17 @@ def unionRanges (h : Hooks P S C E F A Pad) (c : C) : Nat → LocalLayout → Si
       else
         for index in [:count.toNat] do
           let offset ← sizeResult (stride.mul (UInt64.ofNat index))
-          ranges ← unionRanges h c fuel element (← sizeResult (base.add offset)) ranges
+          ranges ← descend element (← sizeResult (base.add offset)) ranges
     | .Arbitrary offsets _ =>
       for index in [:offsets.size] do
         let some offset := offsets[index]? | throw (.invalidProgram "union layout field offset")
-        ranges ← unionRanges h c fuel (← h.projection.field c layout index) (← sizeResult (base.add offset)) ranges
+        ranges ← descend (← h.projection.field c layout index) (← sizeResult (base.add offset)) ranges
     if let .Multiple _ _ _ variants := layout.layout.variants then
       for variant in [:variants.size] do
-        ranges ← unionRanges h c fuel (← h.projection.variant c layout variant) base ranges
+        ranges ← descend (← h.projection.variant c layout variant) base ranges
     return ranges
+termination_by layoutOrder typeRank layout
+decreasing_by exact smaller
 
 private def checkScalarRange [PointerProvenance P] (h : Hooks P S C E F A Pad) (c : C)
     (session : Session P) (scalar : Scalar P) (abi : ABI.Scalar) : M S Unit := do
@@ -338,13 +353,18 @@ private def primitive [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F
     return some session
   | _ => return none
 
-/-- Recursive ValueVisitor plus validity-specific primitive/array/union rules.
-Fuel exhaustion is visible resource failure; it never validates an unexplored
-subvalue. Fields follow in-memory order; enum tag precedes active variant. -/
-def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c : C) :
-    Nat → Session P → RuntimePlace P → M S (Session P)
-  | 0, _, _ => throw (.resourceExhaustion "validity traversal fuel")
-  | fuel+1, session, place => do
+/-- Dynamic unpack changes from an unsized place to a sized concrete place.
+Within each phase the static layout order strictly decreases. -/
+def visitOrder (typeRank : MIR.TyId → Nat) (layout : LocalLayout) : Nat × Nat :=
+  (if layout.layout.isSized then 0 else 1, layoutOrder typeRank layout)
+
+/-- Visit fields in memory order and the enum tag before the selected variant. -/
+def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c : C)
+    (typeRank : MIR.TyId → Nat) (session : Session P) (place : RuntimePlace P) : M S (Session P) := do
+    let descend (childSession : Session P) (child : RuntimePlace P) := do
+      if smaller : Prod.Lex (· < ·) (· < ·) (visitOrder typeRank child.layout) (visitOrder typeRank place.layout) then
+        visit h c typeRank childSession child
+      else throw (.invalidProgram "validity projection does not descend")
     let kind ← h.classify c place.layout.ty
     if let some session ← primitive h c session place kind then return session
     let mut session := session
@@ -382,7 +402,7 @@ def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c :
           if (← PlaceDynamic.length h.projection c place) > 0 then
             let child ← PlaceDynamic.index h.projection c place 0
             let path := session.path
-            session ← visit h c fuel {session with path := path.push (.arrayElem 0)} child
+            session ← descend {session with path := path.push (.arrayElem 0)} child
             session := {session with path}
         else
           let stride ← match place.layout.layout.fields with
@@ -396,14 +416,14 @@ def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c :
             let offset ← sizeResult (stride.mul (UInt64.ofNat index))
             let child ← PlaceDynamic.offsetWithMeta h.projection c place offset .wrapping .none element
             let path := session.path
-            session ← visit h c fuel {session with path := path.push (.arrayElem index)} child
+            session ← descend {session with path := path.push (.arrayElem index)} child
             session := {session with path}
     | .pattern base =>
       let layout ← h.projection.layoutOf c base
       if !layout.layout.isSized || !place.layout.layout.isSized || layout.layout.size != place.layout.layout.size then
         throw (.invalidProgram "pattern base transmute layout mismatch")
       let child ← PlaceDynamic.offsetWithMeta h.projection c place .ZERO .wrapping .none layout
-      session ← visit h c fuel session child
+      session ← descend session child
       abiRanges h c session place
     | _ =>
       let oldMayDangle := session.flags.mayDangle
@@ -414,13 +434,13 @@ def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c :
         let inner ← VTable.unpackDynTrait h.vtable c op expected
         let .indirect memory := inner.op | throw (.invalidProgram "dynamic unpack returned immediate")
         let path := session.path
-        session ← visit h c fuel {session with path := path.push (← h.fieldPath c place.layout 0 inner.layout.ty)} ⟨.memory memory,inner.layout⟩
+        session ← descend {session with path := path.push (← h.fieldPath c place.layout 0 inner.layout.ty)} ⟨.memory memory,inner.layout⟩
         session := {session with path}
       else if kind == .box then
         let (pointer, allocator) ← h.projectBox c place
         session ← checkSafe h c session pointer place.layout.ty .box
         let path := session.path
-        session ← visit h c fuel {session with path := path.push (← h.fieldPath c place.layout 1 allocator.layout.ty)} allocator
+        session ← descend {session with path := path.push (← h.fieldPath c place.layout 1 allocator.layout.ty)} allocator
         session := {session with path}
       else
         match place.layout.layout.fields with
@@ -435,14 +455,14 @@ def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c :
           if session.flags.resetProvenanceAndPadding && session.dataBytes.isSome then
             let base ← dataOffset h c place
             if !place.layout.layout.isSized then throw (.invalidProgram "unsized union data ranges")
-            let ranges ← h.cachedUnionRanges c place.layout (unionRanges h c fuel place.layout Size.ZERO .empty)
+            let ranges ← h.cachedUnionRanges c place.layout (unionRanges h c typeRank place.layout Size.ZERO .empty)
             for range in ranges.toArray do
               session ← markRange session (← sizeResult (base.add range.start)) range.size
         | .Arbitrary _ order =>
           for index in order do
             let child ← PlaceDynamic.field h.projection c place index
             let path := session.path
-            session ← visit h c fuel {session with path := path.push (← h.fieldPath c place.layout index child.layout.ty)} child
+            session ← descend {session with path := path.push (← h.fieldPath c place.layout index child.layout.ty)} child
             session := {session with path}
         | .Array stride _ =>
           let len ← PlaceDynamic.length h.projection c place
@@ -453,14 +473,14 @@ def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c :
             let offset ← sizeResult (stride.mul (UInt64.ofNat index))
             let child ← PlaceDynamic.offsetWithMeta h.projection c place offset .wrapping .none element
             let path := session.path
-            session ← visit h c fuel {session with path := path.push (.arrayElem index)} child
+            session ← descend {session with path := path.push (.arrayElem index)} child
             session := {session with path}
         match place.layout.layout.variants with
         | .Multiple .. =>
           let variant ← Discriminant.readDiscriminant h.discriminant c (← h.toOp c place)
           let child ← PlaceDynamic.downcast h.projection c place variant
           let path := session.path
-          session ← visit h c fuel {session with path := path.push (← h.variantPath c place.layout variant)} child
+          session ← descend {session with path := path.push (← h.variantPath c place.layout variant)} child
           session := {session with path}
         | .Empty =>
           match kind with
@@ -471,12 +491,14 @@ def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c :
     unless ← h.opsemInhabited c place.layout.ty do throw (.invalidProgram "uninhabited type passed validity")
     if h.debugAssertions then abiRanges h c session place
     return session
+termination_by visitOrder typeRank place.layout
+decreasing_by exact smaller
 
 /-- A fieldless inhabited aggregate has no value bytes or child accesses.
 The premises expose compiler queries at this state, rather than assuming a
 validation-operation outcome. -/
 theorem visit_fieldless [PointerProvenance P] [DecidableEq P]
-    (h : Hooks P S C E F A Pad) (c : C) (fuel : Nat) (session : Session P)
+    (h : Hooks P S C E F A Pad) (c : C) (typeRank : MIR.TyId → Nat) (session : Session P)
     (place : RuntimePlace P) (state : S) (variant : Nat)
     (classify : h.classify c place.layout.ty state =
       .ok (.aggregate false false false) state)
@@ -484,8 +506,9 @@ theorem visit_fieldless [PointerProvenance P] [DecidableEq P]
     (fields : place.layout.layout.fields = .Arbitrary #[] #[])
     (variants : place.layout.layout.variants = .Single variant)
     (runtime : session.ctfeMode = none) (debugOff : h.debugAssertions = false) :
-    visit h c (fuel+1) session place state = .ok session state := by
-  simp [visit, classify, primitive, fields, variants, runtime, inhabited, debugOff,
+    visit h c typeRank session place state = .ok session state := by
+  rw [visit.eq_1]
+  simp [classify, primitive, fields, variants, runtime, inhabited, debugOff,
     bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
   cases session with | mk path flags mode tracking bytes =>
     cases flags
@@ -527,42 +550,35 @@ theorem resetPadding_memory_zero [PointerProvenance P] (h : Hooks P S C E F A Pa
 /-- Runtime validation: root may retag/reset; tracked pointees are checked in
 LIFO order without reset, without further tracking, and under may_dangle. -/
 def validatePlace [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c : C)
-    (fuel : Nat) (place : RuntimePlace P) (recursive reset : Bool) : M S Unit := do
+    (place : RuntimePlace P) (recursive reset : Bool) : M S Unit := do
   let name ← h.typeName c place.layout.ty
   let initial : Session P := {
     path := ⟨name,#[]⟩, flags := ⟨reset,false⟩, ctfeMode := none
     refTracking := if recursive then some .empty else none, dataBytes := none }
-  let mut session ← h.withGhostValidation do
+  let session ← h.withGhostValidation do
     let mut session := initial
     if reset then
       if let .indirect _ := (← h.toOp c place).op then session := {session with dataBytes := some .empty}
-    session ← visit h c fuel session place
+    session ← visit h c (h.typeRank (← get)) session place
     resetPadding h c session place
     return session
   if recursive then
-    let mut remaining := fuel
-    let mut continueLoop := true
-    while continueLoop do
-      match session.refTracking.bind RefTracking.next with
-      | none => continueLoop := false
-      | some ((key,path),tracking) =>
-        if remaining == 0 then throw (.resourceExhaustion "recursive validity tracker fuel")
-        remaining := remaining - 1
-        session := {session with refTracking := some tracking}
-        let childSession : Session P := {path, flags := ⟨false,true⟩,ctfeMode := none,refTracking := none,dataBytes := none}
-        h.withGhostValidation do
-          let child : RuntimePlace P := ⟨.memory key.mplace,key.layout⟩
-          let visited ← visit h c fuel childSession child
-          resetPadding h c visited child
+    let some tracking := session.refTracking | return
+    for (key,path) in tracking.todo.reverse do
+      let childSession : Session P := {path, flags := ⟨false,true⟩,ctfeMode := none,refTracking := none,dataBytes := none}
+      h.withGhostValidation do
+        let child : RuntimePlace P := ⟨.memory key.mplace,key.layout⟩
+        let visited ← visit h c (h.typeRank (← get)) childSession child
+        resetPadding h c visited child
 
 /-- Const validation exposes the updated worklist to its outer interning loop;
 CTFE restrictions are distinct from ordinary recursive runtime checks. -/
 def constValidatePlace [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c : C)
-    (fuel : Nat) (place : RuntimePlace P) (path : ValidationPath)
+    (place : RuntimePlace P) (path : ValidationPath)
     (tracking : RefTracking (Key P) ValidationPath) (mode : CtfeMode) :
     M S (RefTracking (Key P) ValidationPath) := h.withGhostValidation do
   let session : Session P := {path,flags := ⟨false,false⟩,ctfeMode := some mode,refTracking := some tracking,dataBytes := none}
-  let session ← visit h c fuel session place
+  let session ← visit h c (h.typeRank (← get)) session place
   match session.refTracking with
   | some tracking => return tracking
   | none => throw (.invalidProgram "const validation lost tracker")

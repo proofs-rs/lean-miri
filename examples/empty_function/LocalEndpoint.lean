@@ -30,7 +30,6 @@ set_option linter.unusedSimpArgs false
       machine.borrowTracker = p.before.machine.borrowTracker := by
   have budget : 64 ≤ resources.budget := by have bound := resources.reserve; unfold work at bound; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 := ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   obtain ⟨older,bound,entry,machine,original,installed,body,identity,function,location,locals,tracked,noClocks,
     returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,machineTracked⟩ :=
       LocalInit.init_whole s metadata profile p runtime input resources destination whole value immediate
@@ -38,7 +37,7 @@ set_option linter.unusedSimpArgs false
   have entrySame : BodyStep.withUnit entry .uninit none = entry := by
     change {entry with locals := #[{value := .live (.immediate .uninit),layout := none}]} = entry
     rw [←locals]
-  have first := BodyAssignment.step s metadata profile remaining capacity validation frames entry machine
+  have first := BodyAssignment.step s metadata profile remaining capacity frames entry machine
     identity body function location noClocks noGhost shallow
   rw [entrySame] at first
   let next : LocalUnit.F := {(BodyStep.withUnit entry .uninit (some s.abi.ret.layout)) with location := .mir ⟨0,1⟩}
@@ -137,7 +136,6 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
   have budget : 64 ≤ resources.budget := by have bound := resources.reserve; unfold work at bound; omega
   have positive : 0 < s.capacity := by have bound := resources.capacity; omega
   obtain ⟨remaining,capacity⟩ : ∃ n : Nat, s.capacity = n+2 := ⟨s.capacity-2,by have bound := resources.capacity; omega⟩
-  have validation : 0 < s.options.limits.validation := by have bound := resources.configuredValidation; omega
   obtain ⟨older,bound,installed,frame,machine,original,installEq,depthEq,first,body,identity,function,location,
     locals,frameTracked,noClocks,returnPlace,continuation,varargs,noGhost,shallow,⟨previous,machineEq⟩,tracked⟩ :=
       init_body s metadata profile p runtime input resources destination whole value immediate
@@ -184,7 +182,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
     split <;> exact ⟨_,rfl⟩
   let finalMachine := FrameExit.afterRelevanceAt frames frame post (thread.topUserRelevantFrame.getD frames.size)
   let finish := ReturnContinuation.resume older caller finalMachine p.returnBlock
-  have returned := LocalReturn.core s metadata profile remaining capacity validation older caller frame post body location
+  have returned := LocalReturn.core s metadata profile remaining capacity older caller frame post body location
     locals noClocks frameTracked input.tracker trackedPost thread activePost destination.localId _ atSlot live rfl
     callerNoClocks returnedPlace p.returnBlock unwind normalCont varargs ghostPost shallowPost
   have second := ReturnStep.compose s metadata frames frame machine post finish body location hookEq returned

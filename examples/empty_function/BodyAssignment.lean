@@ -79,7 +79,6 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
 
  theorem scoped_copy (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (noClocks : frame.extra.dataRace = none)
@@ -93,10 +92,10 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
   cases trackerEq : machine.borrowTracker with
   | none =>
     simpa only [MachineHooks.withRetagMode, BodyStep.current, LocalUnit.current, trackerEq] using
-      BodyCopy.unit s metadata profile remaining capacity positive frames frame machine noClocks noGhost shallow
+      BodyCopy.unit s metadata profile remaining capacity frames frame machine noClocks noGhost shallow
   | some tracker =>
     let entered := {machine with borrowTracker := some {tracker with retagMode := .Default}}
-    have copied := BodyCopy.unit s metadata profile remaining capacity positive frames frame entered
+    have copied := BodyCopy.unit s metadata profile remaining capacity frames frame entered
       noClocks noGhost shallow
     simp only [BodyStep.current, LocalUnit.current, entered] at copied
     unfold MachineHooks.withRetagMode
@@ -109,7 +108,6 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
 
  theorem rvalue (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
@@ -182,11 +180,10 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
         (h.copyOp () op (BodyStep.destination frames frame s.abi.ret.layout))) _ = _
   simp only [bind, Bind.bind, EStateM.bind, literal]
   rw [transfer]
-  exact scoped_copy s metadata profile remaining capacity positive frames frame machine noClocks noGhost shallow
+  exact scoped_copy s metadata profile remaining capacity frames frame machine noClocks noGhost shallow
 
  theorem statement (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
@@ -200,7 +197,7 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
       (.Use (.Constant metadata.literal) .Yes)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine,.ok ()) := by
-  have assigned := rvalue s metadata profile remaining capacity positive frames frame machine
+  have assigned := rvalue s metadata profile remaining capacity frames frame machine
     bodyIdentity body function location noClocks noGhost shallow
   change MachineHooks.run (evalRvalueIntoPlace
     (ExecutionMachine.rvalueHooks (ExecutionMachine.withValidation s.cfg s.limits) s.limits)
@@ -211,7 +208,6 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
 machine. Layout caching and the instruction pointer are the only changes. -/
  theorem step (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
-    (positive : 0 < s.options.limits.validation)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
@@ -242,7 +238,7 @@ machine. Layout caching and the instruction pointer are the only changes. -/
       · simpa only [BodyStep.withUnit,LocalUnit.withUnit,body] using found
       · exact first
       · exact kind
-      · exact statement s metadata profile remaining capacity positive frames frame machine
+      · exact statement s metadata profile remaining capacity frames frame machine
           bodyIdentity body function location noClocks noGhost shallow
 
 end EmptyFunction.BodyAssignment

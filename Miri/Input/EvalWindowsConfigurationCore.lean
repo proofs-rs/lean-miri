@@ -152,7 +152,7 @@ def makeWithSourceConnection
         EvalNativeSourceConstruction.call
           sourceLeaves.hostConfiguration.hostUsizeBits nativeLifecycleBacking p
           EvalProjectionMachine.arrays sourceLeaves.nativeBackend context.validityAccess
-          context.pointers context.validity options.limits.validation
+          context.pointers context.validity
           options.limits.callDispatch context.choice options.compatibilityBudget name
           (RuntimePlace.mk (.memory destination.mplace) destination.layout) args)
       context.validityAccess context.allocation

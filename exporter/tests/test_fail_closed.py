@@ -49,7 +49,7 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         document = load_mir_document(self.output)
         self.assertNotIn("completeness", document)
-        self.assertEqual(document["schema_version"], 16)
+        self.assertEqual(document["schema_version"], 17)
         for name in ("layouts", "layout_values", "fn_abis", "abi_arguments", "boolean_queries",
                      "discriminants", "compiler_instance_abis", "compiler_function_facts",
                      "compiler_covariance_queries", "compiler_vtable_queries", "compiler_cast_queries"):
@@ -359,7 +359,7 @@ class FailClosedExportTests(unittest.TestCase):
 
     def test_coroutine_metadata_retains_exact_coverage_and_runtime_abi(self):
         document = self.accepted("coroutine", "root")
-        self.assertEqual(document["schema_version"], 16)
+        self.assertEqual(document["schema_version"], 17)
         coverage = document["compiler_coroutine_coverage"]
         self.assertTrue(coverage["coroutines"])
         self.assertEqual(len(coverage["body_coroutines"]), len(document["bodies"]))

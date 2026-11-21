@@ -35,7 +35,7 @@ theorem forced (s : Static) (metadata : Metadata s) (profile : Profile s)
     ProjectedIndirectPreflight.shifted,bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure]
 
  theorem control_copy (s : Static) (metadata : Metadata s) (profile : Profile s)
-    (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
+    (remaining : Nat) (capacity : s.capacity = remaining+2)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F) (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (base : LocalLayout)
     (memory : MemPlace Provenance) (amount : Size)
@@ -50,7 +50,7 @@ theorem forced (s : Static) (metadata : Metadata s) (profile : Profile s)
       (.frameLocal frames.size id (some amount) s.abi.ret.layout frame.localsIdentity)
       (LocalUnit.current frames frame machine) = (LocalUnit.current frames frame machine,.ok ()) := by
   have wrap := ProjectionWrapping.source s metadata (BodyValidation.active (LocalUnit.current frames frame machine)) memory amount
-  have validated := ProjectedIndirectValidation.validate_projected s metadata profile remaining capacity positive frames frame machine
+  have validated := ProjectedIndirectValidation.validate_projected s metadata profile remaining capacity frames frame machine
     id slot base memory (ProjectedIndirectPreflight.shifted memory amount) amount atSlot live cache noClocks noGhost shallow inbounds wrap
   have forceEq := forced s metadata profile remaining capacity frames frame machine id slot memory amount atSlot live
   exact ProjectedCopy.control_from_force s metadata profile remaining capacity _ _ frames.size id amount frame.localsIdentity

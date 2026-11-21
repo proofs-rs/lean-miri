@@ -70,6 +70,7 @@ mandatory. Portable memory/validation actions still execute in the base hooks. -
 def validityHooks (access : Access S) (base : ValidityVisitor.Hooks P S C E Fn Abi Pad) :
     ValidityVisitor.Hooks P S C E Fn Abi Pad :=
   { base with
+    typeRank := fun state => RuntimeArrayTypes.typeRank (access.get state)
     classify := fun choice ty => do
       let world := access.get (← get)
       if world.entries.any (·.value.ty == ty) then
