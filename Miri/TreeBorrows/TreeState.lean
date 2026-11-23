@@ -548,16 +548,111 @@ private def finishWildcardVisit (root : UniIndex) (isWildcardTree : Bool)
     .NoValidExposedReferences root none else visit.status⟩
 
 /-- Source `LocationTree::perform_wildcard_access`. The stack implements the
-child-first, postorder traversal. Relatedness and SIFA skip decisions are
-recomputed against the cache as child transitions change it. -/
+source visitor's child-first, postorder traversal. Relatedness and SIFA skip
+decisions are recomputed against the cache as child transitions change it.
+-/
 def performWildcardAccessAt (tree : BorrowTree) (initialLocation : LocationTree)
     (root : UniIndex) (maxLocalTag : Option Miri.Memory.BorTag)
     (kind : AccessKind) (protectedTags : ProtectedTags) (isWildcardTree : Bool) :
-    WildcardLocationAccessResult :=
-  let initial : WildcardVisit := ⟨initialLocation, false, .Completed, #[(root, false)]⟩
-  let final := Lean.Loop.forIn {} (initial, 0)
-    (wildcardScan tree root maxLocalTag kind protectedTags isWildcardTree)
-  finishWildcardVisit root isWildcardTree final.1
+    WildcardLocationAccessResult := Id.run do
+  let mut location := initialLocation
+  let mut hasValidExposed := false
+  let mut status := WildcardAccessStatus.Completed
+  let mut stack : Array (UniIndex × Bool) := #[(root, false)]
+  let mut steps := 0
+  while !stack.isEmpty && status == .Completed do
+    steps := steps + 1
+    if steps > tree.nodes.size * 2 + 1 then
+      status := .ParentCycle root
+    else
+      let some (index, afterChildren) := stack.back?
+        | status := .EmptyTraversalStack root
+          continue
+      if !afterChildren then
+        let some node := tree.nodes.get index
+          | status := .MissingNode index
+            continue
+        let onlyForeign := match maxLocalTag with
+          | some maximum => maximum.value < node.tag.value
+          | none => false
+        let relatedness := wildcardRelatedness location.exposedCache root index kind
+          isWildcardTree onlyForeign
+        let state := location.perms.get index |>.getD node.defaultLocationState
+        let skip := match relatedness.bind exactRelatedness? with
+          | some rel =>
+              match state.skipIfKnownNoop kind rel with
+              | .SkipSelfAndChildren => true
+              | .Recurse => false
+          | none => false
+        if skip then
+          stack := stack.pop
+        else
+          stack := stack.pop.push (index, true)
+          for child in node.children do
+            stack := stack.push (child, false)
+      else
+        stack := stack.pop
+        let some node := tree.nodes.get index
+          | status := .MissingNode index
+            continue
+        let onlyForeign := match maxLocalTag with
+          | some maximum => maximum.value < node.tag.value
+          | none => false
+        let relatedness := wildcardRelatedness location.exposedCache root index kind
+          isWildcardTree onlyForeign
+        match relatedness with
+        | none =>
+            status := .NoValidExposedReferences root (some index)
+        | some related =>
+            let isProtected := protectedTags.contains node.tag
+            let oldState := location.perms.get index |>.getD node.defaultLocationState
+            if node.isExposed &&
+                (oldState.permission.strongestAllowedLocalAccess isProtected).allows kind &&
+                (maxLocalTag.isNone || maxLocalTag.any
+                  (fun maximum => maximum.value >= node.tag.value)) then
+              hasValidExposed := true
+            let (withState, state) := location.perms.orInsert index node.defaultLocationState
+            location := { location with perms := withState }
+            match exactRelatedness? related with
+            | none => pure ()
+            | some rel =>
+                -- Local workaround for https://github.com/rust-lang/miri/issues/5543.
+                -- Child transitions can remove the last exposed descendant and
+                -- change an entry-time Either access into a Foreign access.
+                -- The complete foreign-Write no-op class is read-safe too.
+                -- A current SIFA skip therefore leaves every state field
+                -- unchanged, including the held-sensitive protected cases.
+                -- Retain materialization and all child/cache/witness effects.
+                if rel == .ForeignAccess && state.foreignWriteNoop isProtected &&
+                    state.skipIfKnownNoop kind rel == .SkipSelfAndChildren then
+                  pure ()
+                else
+                  match state.recordNewAccess kind rel with
+                  | .DebugAssertion => status := .RecordDebugAssertion index
+                  | .Recorded recorded =>
+                      location := { location with perms := location.perms.insert index recorded }
+                      let access := recorded.performAccess kind rel isProtected
+                      let updatedState := access.resultingState
+                      location := { location with perms := location.perms.insert index updatedState }
+                      match access with
+                      | .Success _ transition =>
+                          if node.isExposed && !transition.isNoop then
+                            let oldLevel := oldState.permission.strongestAllowedLocalAccess isProtected
+                            let newLevel := updatedState.permission.strongestAllowedLocalAccess isProtected
+                            let update := location.exposedCache.updateExposure tree.nodes index
+                              oldLevel newLevel
+                            location := { location with exposedCache := update.cache }
+                            match update.outcome with
+                            | .error error => status := .CacheFailure error
+                            | .ok _ => pure ()
+                      | .Error _ error => status := .TransitionError index error
+                      | .PermissionInvariantFailure _ => status := .PermissionInvariantFailure index
+                      | .TransitionApplicationInvariantFailure _ =>
+                          status := .TransitionApplicationInvariantFailure index
+                      | .PossibleInvariantFailure _ => status := .PossibleInvariantFailure index
+  if status == .Completed && !hasValidExposed && !isWildcardTree then
+    status := .NoValidExposedReferences root none
+  return { location, status }
 
 private def commitNormalAccessAt (tree : BorrowTree) (location : LocationTree)
     (kind : AccessKind) (protectedTags : ProtectedTags)
@@ -607,10 +702,52 @@ wildcard roots are handled by the separate wildcard-access component.
 -/
 def performNormalAccessAt (tree : BorrowTree) (location : LocationTree)
     (start : UniIndex) (kind : AccessKind) (protectedTags : ProtectedTags)
-    (mode : Tree.ChildrenVisitMode) : NormalLocationAccessResult :=
-  commitNormalAccessAt tree location kind protectedTags
-    (Tree.NormalTreeState.performAccess (normalProjection tree location protectedTags)
-      start.toNat kind mode)
+    (mode : Tree.ChildrenVisitMode) : NormalLocationAccessResult := Id.run do
+  let access := Tree.NormalTreeState.performAccess
+    (normalProjection tree location protectedTags) start.toNat kind mode
+  let mut nextLocation := location
+  for position in [:access.tree.locationStates.size] do
+    match access.tree.locationStates[position]? with
+    | some (some state) =>
+        match UniIndex.ofNat? position with
+        | some index =>
+            nextLocation := { nextLocation with perms := nextLocation.perms.insert index state }
+        | none => pure ()
+    | _ => pure ()
+  let mut cacheOutcome : Except ExposedCacheError Unit := .ok ()
+  for event in access.visited do
+    if cacheOutcome matches .ok _ then
+      match UniIndex.ofNat? event.node with
+      | none => cacheOutcome := .error (.InvalidIndex event.node)
+      | some index =>
+        match tree.nodeAt index with
+        | none => cacheOutcome := .error (.MissingNode index)
+        | some node =>
+          if node.isExposed && failingNode? access.status != some event.node then
+            match tree.locationStateAt location index, access.tree.stateAt event.node with
+            | some oldState, some newState =>
+                match performAccessTransition kind event.relatedness oldState.permission
+                    (protectedTags.contains node.tag) with
+                | .Transition transition =>
+                    if !transition.isNoop then
+                      let oldLevel := oldState.permission.strongestAllowedLocalAccess
+                        (protectedTags.contains node.tag)
+                      let newLevel := newState.permission.strongestAllowedLocalAccess
+                        (protectedTags.contains node.tag)
+                      let update := nextLocation.exposedCache.updateExposure tree.nodes index
+                        oldLevel newLevel
+                      nextLocation := { nextLocation with exposedCache := update.cache }
+                      cacheOutcome := update.outcome
+                | .UndefinedBehavior | .ImpossibleProtectedReservedIM => pure ()
+            | _, _ => cacheOutcome := .error (.MissingNode index)
+  return { location := nextLocation, access, outcome := cacheOutcome }
+
+private theorem performNormalAccessAt_eq_commit (tree : BorrowTree) (location : LocationTree)
+    (start : UniIndex) (kind : AccessKind) (protectedTags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) :
+    tree.performNormalAccessAt location start kind protectedTags mode =
+      commitNormalAccessAt tree location kind protectedTags
+        ((normalProjection tree location protectedTags).performAccess start.toNat kind mode) := rfl
 
 private def updateEveryLocation (tree : BorrowTree)
     (update : LocationTree → LocationTree × Except TreeMutationError Unit) :
@@ -1045,6 +1182,7 @@ def performTreeAccessAt (tree : BorrowTree) (location : LocationTree)
   let mut currentLocation := location
   let mut normalAccess : Option Tree.NormalAccessResult := none
   let mut accessedRoot? : Option UniIndex := none
+  let mut status : Option BorrowTreeAccessStatus := none
   if let some source := source? then
     let normal := tree.performNormalAccessAt currentLocation source kind protectedTags mode
     currentLocation := normal.location
@@ -1061,8 +1199,179 @@ def performTreeAccessAt (tree : BorrowTree) (location : LocationTree)
             return ⟨currentLocation, normalAccess,
               some (.AccessFailure range (.MissingLocationState normal.access.root))⟩
         | some root => accessedRoot? := some root
-  return performOtherRootsAt tree currentLocation source? accessedRoot? kind protectedTags
-    mode range normalAccess
+  let maxLocalTag := accessedRoot?.bind fun root => (tree.nodes.get root).map TreeNode.tag
+  let minExposed := if mode == .SkipChildrenOfAccessed then
+      source?.bind (minExposedChild tree)
+    else none
+  let mut stopOtherRoots := false
+  for rootPosition in [:tree.roots.size] do
+    if status.isNone && !stopOtherRoots then
+      match tree.roots[rootPosition]? with
+      | none => pure ()
+      | some root =>
+          let rootTag := (tree.nodes.get root).map TreeNode.tag
+          let pastMinExposed := match rootTag, minExposed with
+            | some tag, some minimum => tag.value > minimum.value
+            | _, _ => false
+          if mode == .SkipChildrenOfAccessed && pastMinExposed then
+            stopOtherRoots := true
+          else if accessedRoot? != some root then
+            let wildcard := tree.performWildcardAccessAt currentLocation root
+              maxLocalTag kind protectedTags (rootPosition != 0)
+            currentLocation := wildcard.location
+            if wildcard.status != .Completed then
+              status := some (.WildcardFailure range wildcard.status)
+  return ⟨currentLocation, normalAccess, status⟩
+
+private def replayOtherRootsAt (tree : BorrowTree) (location : LocationTree)
+    (source? accessedRoot? : Option UniIndex) (kind : AccessKind) (protectedTags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (normalAccess : Option Tree.NormalAccessResult) : TreeLocationAccessAtResult := Id.run do
+  let mut currentLocation := location
+  let mut status : Option BorrowTreeAccessStatus := none
+  let maxLocalTag := accessedRoot?.bind fun root => (tree.nodes.get root).map TreeNode.tag
+  let minExposed := if mode == .SkipChildrenOfAccessed then
+      source?.bind (minExposedChild tree)
+    else none
+  let mut stopOtherRoots := false
+  for rootPosition in [:tree.roots.size] do
+    if status.isNone && !stopOtherRoots then
+      match tree.roots[rootPosition]? with
+      | none => pure ()
+      | some root =>
+          let rootTag := (tree.nodes.get root).map TreeNode.tag
+          let pastMinExposed := match rootTag, minExposed with
+            | some tag, some minimum => tag.value > minimum.value
+            | _, _ => false
+          if mode == .SkipChildrenOfAccessed && pastMinExposed then
+            stopOtherRoots := true
+          else if accessedRoot? != some root then
+            let wildcard := tree.performWildcardAccessAt currentLocation root
+              maxLocalTag kind protectedTags (rootPosition != 0)
+            currentLocation := wildcard.location
+            if wildcard.status != .Completed then
+              status := some (.WildcardFailure range wildcard.status)
+  return ⟨currentLocation, normalAccess, status⟩
+
+private abbrev OtherRootLoopState := LocationTree × Option BorrowTreeAccessStatus × Bool
+
+private def otherRootLoopState (current : OtherRootProgress) : OtherRootLoopState :=
+  (current.location, current.status, current.stopped)
+
+private theorem otherRootLoopTransport (scan : Nat → OtherRootLoopState → Id (ForInStep OtherRootLoopState))
+    (advance : Nat → OtherRootProgress → OtherRootProgress)
+    (transition : ∀ position current, scan position (otherRootLoopState current) =
+      .yield (otherRootLoopState (advance position current)))
+    (positions : List Nat) (current : OtherRootProgress) :
+    Id.run (forIn positions (otherRootLoopState current) scan) =
+      otherRootLoopState (Id.run (forIn positions current
+        (fun position state => pure (.yield (advance position state))))) := by
+  induction positions generalizing current with
+  | nil => rfl
+  | cons position positions ih =>
+    simpa only [List.forIn_cons, transition, bind, Bind.bind, pure, Pure.pure] using
+      ih (advance position current)
+
+open Lean Elab Tactic in
+elab "name_other_root_loop" : tactic => do
+  liftMetaTactic fun goal => goal.withContext do
+    let target ← goal.getType
+    let some loop := target.find? (fun expr => expr.isAppOf ``ForIn.forIn)
+      | throwError "no ForIn operation found"
+    let body := loop.getAppArgs.back!
+    let goal ← goal.define `scan (← Lean.Meta.inferType body) body
+    let (scan, goal) ← goal.intro1P
+    let target ← goal.getType
+    return [← goal.change (target.replace fun expr =>
+      if expr == body then some (mkFVar scan) else none)]
+
+private theorem otherRootsRuntime_eq (tree : BorrowTree) (location : LocationTree)
+    (source accessedRoot : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (range : ByteRange) (normal : Option Tree.NormalAccessResult) :
+    replayOtherRootsAt tree location source accessedRoot kind tags mode range normal =
+      performOtherRootsAt tree location source accessedRoot kind tags mode range normal := by
+  unfold replayOtherRootsAt performOtherRootsAt
+  dsimp only [Id.run, otherRootBounds]
+  name_other_root_loop
+  let minExposed := if mode == .SkipChildrenOfAccessed then source.bind (minExposedChild tree) else none
+  let maxLocalTag := accessedRoot.bind fun root => (tree.nodes.get root).map TreeNode.tag
+  let advance := advanceOtherRoot tree accessedRoot kind tags mode range minExposed maxLocalTag
+  have transition (position : Nat) (current : OtherRootProgress) :
+      scan position (otherRootLoopState current) =
+        .yield (otherRootLoopState (advance position current)) := by
+    rcases current with ⟨currentLocation, status, stopped⟩
+    simp only [scan, otherRootLoopState, advance, advanceOtherRoot, otherRootAction, minExposed, maxLocalTag]
+    by_cases active : (status.isNone && !stopped) = true
+    · simp only [active, ↓reduceIte]
+      cases rootAt : tree.roots[position]? with
+      | none => rfl
+      | some root =>
+        dsimp only
+        by_cases stop : (mode == .SkipChildrenOfAccessed &&
+            (match (tree.nodes.get root).map TreeNode.tag, minExposed with
+             | some tag, some minimum => tag.value > minimum.value
+             | _, _ => false)) = true
+        · simp only [minExposed] at stop
+          simp only [stop, ↓reduceIte]; rfl
+        · simp only [minExposed] at stop
+          simp only [stop, Bool.false_eq_true, ↓reduceIte]
+          by_cases visit : (accessedRoot != some root) = true
+          · simp only [visit, ↓reduceIte, commitOtherRoot]
+            by_cases failed : ((tree.performWildcardAccessAt currentLocation root maxLocalTag
+                kind tags (position != 0)).status != .Completed) = true
+            · simp only [maxLocalTag] at failed
+              simp only [failed, ↓reduceIte]; rfl
+            · simp only [maxLocalTag] at failed
+              simp only [failed, Bool.false_eq_true, ↓reduceIte]; rfl
+          · simp only [visit, Bool.false_eq_true, ↓reduceIte]; rfl
+    · simp [active, pure, Pure.pure]
+  have transport := otherRootLoopTransport scan advance transition
+    (List.range' 0 tree.roots.size) { location }
+  change _ = _ at transport
+  simp only [Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size, Nat.sub_zero,
+    Nat.add_sub_cancel, Nat.div_one]
+  rw [show otherRootLoopState ({ location } : OtherRootProgress) = (location, none, false) from rfl] at transport
+  dsimp only [Id.run] at transport
+  rw [transport]
+  rfl
+
+private theorem locationRuntime_eq (tree : BorrowTree) (location : LocationTree)
+    (source : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (range : ByteRange) :
+    tree.performTreeAccessAt location source kind tags mode range =
+      match source with
+      | none => performOtherRootsAt tree location none none kind tags mode range none
+      | some index =>
+        let normal := tree.performNormalAccessAt location index kind tags mode
+        let seen := some normal.access
+        match normal.outcome with
+        | .error error => ⟨normal.location, seen, some (.CacheFailure range error)⟩
+        | .ok () =>
+          if normal.access.status != .Completed then
+            ⟨normal.location, seen, some (.AccessFailure range normal.access.status)⟩
+          else match UniIndex.ofNat? normal.access.root with
+            | none => ⟨normal.location, seen,
+                some (.AccessFailure range (.MissingLocationState normal.access.root))⟩
+            | some root =>
+              performOtherRootsAt tree normal.location source (some root) kind tags mode range seen := by
+  cases source with
+  | none => exact otherRootsRuntime_eq tree location none none kind tags mode range none
+  | some index =>
+    unfold performTreeAccessAt
+    dsimp only [Id.run]
+    generalize tree.performNormalAccessAt location index kind tags mode = normal
+    cases outcome : normal.outcome with
+    | error error => rfl
+    | ok value =>
+      cases value
+      by_cases failed : (normal.access.status != .Completed) = true
+      · simp only [failed, ↓reduceIte]; rfl
+      · simp only [failed, Bool.false_eq_true, ↓reduceIte]
+        cases UniIndex.ofNat? normal.access.root with
+        | none => rfl
+        | some root =>
+          exact otherRootsRuntime_eq tree normal.location (some index) (some root)
+            kind tags mode range (some normal.access)
 
 /-- Ranged access for concrete or wildcard provenance. Tree state and
 Willard-cache updates are threaded across homogeneous range segments and all
@@ -2288,7 +2597,7 @@ private theorem fresh_projection (tag : BorTag) (size : Size) (protectedTags : P
 private theorem fresh_normal_at (tag : BorTag) (size : Size) (protectedTags : ProtectedTags) :
     (BorrowTree.new tag size).performNormalAccessAt freshLocation rootIndex .Write protectedTags .VisitChildrenOfAccessed =
       ⟨freshLocation,⟨freshNormal (protectedTags.contains tag),0,[⟨0,.LocalAccess⟩],.Completed⟩,.ok ()⟩ := by
-  unfold performNormalAccessAt commitNormalAccessAt
+  unfold performNormalAccessAt
   rw [fresh_projection]
   simp only [rootIndex,UniIndex.toNat,UInt32.toNat_zero,fresh_normal]
   simp [freshNormal,freshLocation,BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
@@ -2302,7 +2611,7 @@ private theorem fresh_tree_at (tag : BorTag) (size : Size) (protectedTags : Prot
   unfold performTreeAccessAt
   dsimp only [Id.run]
   rw [fresh_normal_at]
-  simp [performOtherRootsAt, otherRootBounds, advanceOtherRoot, otherRootAction, BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
+  simp [BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
     UniValMap.insert,UniValMap.get,UniValMap.extendTo,Id.run,bind,Bind.bind,pure,Pure.pure,
     ←Array.forIn_toList]
 
@@ -2374,6 +2683,137 @@ private theorem wildcardScan_decreases (tree : BorrowTree) (root : UniIndex)
       simp only [active, ↓reduceIte]
       split <;> omega
   · simp [active] at more
+
+private abbrev WildcardLoopState :=
+  LocationTree × Bool × WildcardAccessStatus × Array (UniIndex × Bool) × Nat
+
+private def wildcardLoopState (cursor : WildcardVisit × Nat) : WildcardLoopState :=
+  (cursor.1.location, cursor.1.hasValidExposed, cursor.1.status, cursor.1.stack, cursor.2)
+
+private def wildcardLoopStep : ForInStep (WildcardVisit × Nat) → ForInStep WildcardLoopState
+  | .done cursor => .done (wildcardLoopState cursor)
+  | .yield cursor => .yield (wildcardLoopState cursor)
+
+private theorem wildcardLoopTransport (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags)
+    (isWildcardTree : Bool) (scan : Unit → WildcardLoopState → Id (ForInStep WildcardLoopState))
+    (transition : ∀ cursor, scan () (wildcardLoopState cursor) =
+      wildcardLoopStep (wildcardScan tree root maxLocalTag kind tags isWildcardTree () cursor))
+    (cursor : WildcardVisit × Nat) :
+    Lean.Loop.forIn (m := Id) {} (wildcardLoopState cursor) scan =
+      wildcardLoopState (Lean.Loop.forIn (m := Id) {} cursor
+        (wildcardScan tree root maxLocalTag kind tags isWildcardTree)) := by
+  have transport (bound : Nat) (cursor : WildcardVisit × Nat)
+      (measure : wildcardMeasure (tree.nodes.size * 2 + 1) cursor = bound) :
+      Lean.Loop.forIn (m := Id) {} (wildcardLoopState cursor) scan =
+        wildcardLoopState (Lean.Loop.forIn (m := Id) {} cursor
+          (wildcardScan tree root maxLocalTag kind tags isWildcardTree)) := by
+    induction bound using Nat.strongRecOn generalizing cursor with
+    | ind bound ih =>
+      rw [Lean.Loop.forIn_eq_of_monadTail, transition]
+      conv => rhs; rw [Lean.Loop.forIn_eq_of_monadTail]
+      cases result : wildcardScan tree root maxLocalTag kind tags isWildcardTree () cursor with
+      | done next => rfl
+      | yield next =>
+        simp only [result, wildcardLoopStep, bind, Bind.bind]
+        exact ih _ (by
+          rw [← measure]
+          exact wildcardScan_decreases tree root maxLocalTag kind tags isWildcardTree cursor next result)
+          next rfl
+  exact transport _ cursor rfl
+
+set_option maxHeartbeats 8000000 in
+private theorem wildcardRuntime_eq (tree : BorrowTree) (location : LocationTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags)
+    (isWildcardTree : Bool) :
+    tree.performWildcardAccessAt location root maxLocalTag kind tags isWildcardTree =
+      finishWildcardVisit root isWildcardTree (Lean.Loop.forIn (m := Id) {}
+        (⟨location, false, .Completed, #[(root, false)]⟩, 0)
+        (wildcardScan tree root maxLocalTag kind tags isWildcardTree)).1 := by
+  unfold performWildcardAccessAt
+  simp only [Id.run, bind, pure, ForIn.forIn]
+  name_ancestor_loop
+  have transition (cursor : WildcardVisit × Nat) :
+      scan () (wildcardLoopState cursor) =
+        wildcardLoopStep (wildcardScan tree root maxLocalTag kind tags isWildcardTree () cursor) := by
+    rcases cursor with ⟨⟨location, exposed, status, stack⟩, steps⟩
+    simp only [scan, wildcardLoopState, wildcardScan, WildcardVisit.active]
+    by_cases active : (!stack.isEmpty && status == .Completed) = true
+    · simp only [active, ↓reduceIte]
+      by_cases past : tree.nodes.size * 2 + 1 < steps + 1
+      · simp only [past, ↓reduceIte, wildcardLoopStep, wildcardLoopState, pure, Pure.pure]
+      · simp only [past, ↓reduceIte]
+        unfold visitWildcardNode prepareWildcardNode
+        simp only [Id.run]
+        cases head : stack.back? with
+        | none => simp [head, wildcardLoopState, wildcardLoopStep, pure, Pure.pure]
+        | some value =>
+          rcases value with ⟨index, afterChildren⟩
+          cases afterChildren
+          all_goals
+            simp only [head, Bool.not_true, Bool.not_false, Bool.false_eq_true, ↓reduceIte]
+            cases nodeAt : tree.nodes.get index with
+            | none => simp [nodeAt, wildcardLoopState, wildcardLoopStep, pure, Pure.pure]
+            | some node =>
+              dsimp only
+              repeat' first
+                | rfl
+                | split <;>
+                  simp_all only [commitWildcardPermission, wildcardLoopState, wildcardLoopStep,
+                    bind, Bind.bind, pure, Pure.pure, Id.run, ↓reduceIte]
+              all_goals
+                rename_i relatedness related relation
+                by_cases witness : (node.isExposed &&
+                    (Permission.strongestAllowedLocalAccess ((location.perms.get index).getD node.defaultLocationState).permission
+                      (tags.contains node.tag)).allows kind &&
+                    (maxLocalTag.isNone || maxLocalTag.any
+                      (fun maximum => maximum.value >= node.tag.value))) = true
+                <;> simp_all only [wildcardLoopState, wildcardLoopStep, Bool.false_eq_true, ↓reduceIte]
+              all_goals
+                cases exactPosition : exactRelatedness? related
+                case' none => rfl
+                case' some rel =>
+                  dsimp only
+                  by_cases skip : (rel == .ForeignAccess &&
+                      (location.perms.orInsert index node.defaultLocationState).2.foreignWriteNoop
+                        (tags.contains node.tag) &&
+                      (location.perms.orInsert index node.defaultLocationState).2.skipIfKnownNoop kind rel ==
+                        .SkipSelfAndChildren) = true
+                  · simp only [skip, ↓reduceIte]
+                  · simp only [skip, Bool.false_eq_true, ↓reduceIte]
+                    cases recordedAt : (location.perms.orInsert index node.defaultLocationState).2
+                        |>.recordNewAccess kind rel
+                    case' DebugAssertion => rfl
+                    case' Recorded recorded =>
+                      dsimp only [commitWildcardPermission, Id.run]
+                      generalize recorded.performAccess kind rel (tags.contains node.tag) = result
+                      cases result <;> try rfl
+                      all_goals
+                        rename_i state transition
+                        dsimp only [Tree.LocationState.AccessResult.resultingState]
+                        by_cases refresh : (node.isExposed && !transition.isNoop) = true
+                        · simp only [refresh, ↓reduceIte]
+                          let oldLevel := ((location.perms.get index).getD node.defaultLocationState).permission
+                          let update := location.exposedCache.updateExposure tree.nodes index
+                            (oldLevel.strongestAllowedLocalAccess (tags.contains node.tag))
+                            (state.permission.strongestAllowedLocalAccess (tags.contains node.tag))
+                          cases cache : update.outcome with
+                          | error error =>
+                            simp only [update, oldLevel] at cache
+                            simp only [cache] <;> rfl
+                          | ok value =>
+                            cases value
+                            simp only [update, oldLevel] at cache
+                            simp only [cache] <;> rfl
+                        · simp only [refresh, Bool.false_eq_true, ↓reduceIte] <;> rfl
+    · simp [active, wildcardLoopStep, wildcardLoopState, pure, Pure.pure]
+  have transport := wildcardLoopTransport tree root maxLocalTag kind tags isWildcardTree scan
+    transition (⟨location, false, .Completed, #[(root, false)]⟩, 0)
+  rw [show wildcardLoopState (⟨location, false, .Completed, #[(root, false)]⟩, 0) =
+    (location, false, .Completed, #[(root, false)], 0) from rfl] at transport
+  rw [transport]
+  dsimp only [wildcardLoopState, finishWildcardVisit]
+  split <;> simp_all only [Bool.false_eq_true, ↓reduceIte, pure, Pure.pure]
 
 private def wildcardNodePre (tree : BorrowTree) (root : UniIndex)
     (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags) (isWildcardTree : Bool)
@@ -2467,7 +2907,8 @@ theorem wildcardPre_iff (tree : BorrowTree) (location : LocationTree) (root : Un
     (isWildcardTree : Bool) (finish : WildcardLocationAccessResult → Prop) :
     finish (tree.performWildcardAccessAt location root maxLocalTag kind tags isWildcardTree) ↔
       wildcardPre tree location root maxLocalTag kind tags isWildcardTree finish := by
-  unfold wildcardPre performWildcardAccessAt
+  rw [wildcardRuntime_eq]
+  unfold wildcardPre
   exact wildcardWalkPre_iff tree root maxLocalTag kind tags isWildcardTree
     (fun final => finish (finishWildcardVisit root isWildcardTree final.1))
     (tree.nodes.size * 2 + 2) (⟨location, false, .Completed, #[(root, false)]⟩, 0)
@@ -2573,14 +3014,13 @@ theorem locationContract_iff (tree : BorrowTree) (location : LocationTree) (sour
     (finish : TreeLocationAccessAtResult → Prop) :
     finish (tree.performTreeAccessAt location source kind tags mode range) ↔
       locationContract tree location source kind tags mode range finish := by
+  rw [locationRuntime_eq]
   cases source with
   | none => exact otherRootsPre_iff tree location none none kind tags mode range none finish
   | some index =>
     unfold locationContract
     dsimp only
-    rw [Tree.NormalTreeState.accessPre_iff]
-    unfold performTreeAccessAt performNormalAccessAt
-    dsimp only [Id.run]
+    rw [Tree.NormalTreeState.accessPre_iff, performNormalAccessAt_eq_commit]
     generalize commitNormalAccessAt tree location kind tags
       ((normalProjection tree location tags).performAccess index.toNat kind mode) = normal
     cases outcome : normal.outcome with
@@ -2588,7 +3028,7 @@ theorem locationContract_iff (tree : BorrowTree) (location : LocationTree) (sour
     | ok value =>
       cases value
       by_cases failed : (normal.access.status != .Completed) = true
-      · simp only [failed, ↓reduceIte]; rfl
+      · simp only [failed, ↓reduceIte]
       · simp only [failed, Bool.false_eq_true, ↓reduceIte]
         cases UniIndex.ofNat? normal.access.root with
         | none => rfl

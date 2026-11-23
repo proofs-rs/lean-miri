@@ -30,3 +30,83 @@
 +      repeat' split at terminal
 +      simp_all
 +      all_goals cases congrArg Prod.snd terminal
+--- a/examples/duplicate_prefix/ImmediateReadProof.lean
++++ b/examples/duplicate_prefix/ImmediateReadProof.lean
+@@ -28 +28 @@
+-    Miri.Interpreter.readImmediateRaw, localMemoryLayout,
++    Miri.Interpreter.readImmediateRaw, Miri.Interpreter.finishImmediateRead, localMemoryLayout,
+--- a/examples/duplicate_prefix/AllocationCopy.lean
++++ b/examples/duplicate_prefix/AllocationCopy.lean
+@@ -16 +16 @@
+--- Only proof automation: expand the exact private implementation definition.
++-- Only proof automation: expand the exact implementation definition.
+@@ -21 +21 @@
+-    if name.toString.endsWith suffix.getString then some name else none
++    if ("." ++ name.toString).endsWith suffix.getString then some name else none
+@@ -29 +29 @@
+-    if name.toString.endsWith suffix.getString then some name else none
++    if ("." ++ name.toString).endsWith suffix.getString then some name else none
+--- a/examples/duplicate_prefix/CopyIntrinsic.lean
++++ b/examples/duplicate_prefix/CopyIntrinsic.lean
+@@ -63,4 +63,4 @@
+-  unfold_internal ".Miri.Interpreter.isPrimitiveReadable"
+-  unfold_internal ".PlaceMachine.commit"
+-  unfold_internal ".PlaceMachine.finish"
+-  simp [localMemoryLayout, scalarLayout, Miri.Interpreter.readImmediateRaw, retain,
++  unfold Miri.Interpreter.isPrimitiveReadable
++  unfold PlaceMachine.commit
++  unfold PlaceMachine.finish
++  simp [localMemoryLayout, scalarLayout, Miri.Interpreter.readImmediateRaw, Miri.Interpreter.finishImmediateRead, retain,
+--- a/examples/duplicate_prefix/ReferenceValidity.lean
++++ b/examples/duplicate_prefix/ReferenceValidity.lean
+@@ -53 +53 @@
+-  unfold_internal ".Miri.Interpreter.isPrimitiveReadable"
++  unfold Miri.Interpreter.isPrimitiveReadable
+@@ -56 +56 @@
+-    Miri.Interpreter.readImmediateRaw, retain, get, getThe, MonadStateOf.get, EStateM.get,
++    Miri.Interpreter.readImmediateRaw, Miri.Interpreter.finishImmediateRead, retain, get, getThe, MonadStateOf.get, EStateM.get,
+--- a/examples/duplicate_prefix/ScalarCopyStage.lean
++++ b/examples/duplicate_prefix/ScalarCopyStage.lean
+@@ -74 +74 @@
+-  unfold_internal ".Miri.Interpreter.isPrimitiveReadable"
++  unfold Miri.Interpreter.isPrimitiveReadable
+@@ -76 +76 @@
+-  simp [ValidityMachine.memoryEnvironment, localMemoryLayout, repr, Miri.Interpreter.readImmediateRaw,
++  simp [ValidityMachine.memoryEnvironment, localMemoryLayout, repr, Miri.Interpreter.readImmediateRaw, Miri.Interpreter.finishImmediateRead,
+@@ -399,2 +399,2 @@
+-  unfold_internal ".PlaceMachine.commit"
+-  unfold_internal ".PlaceMachine.finish"
++  unfold PlaceMachine.commit
++  unfold PlaceMachine.finish
+--- a/examples/duplicate_prefix/PhysicalMemoryRead.lean
++++ b/examples/duplicate_prefix/PhysicalMemoryRead.lean
+@@ -13 +13 @@
+-    if name.toString.endsWith suffix then some name else none
++    if ("." ++ name.toString).endsWith suffix then some name else none
+@@ -44,0 +45 @@
++  unfold readImmediateAfterAccess
+@@ -79 +79,0 @@
+-  simp only [Bind.bind, Pure.pure, Id.instMonad]
+--- a/examples/duplicate_prefix/PhysicalMemoryWrite.lean
++++ b/examples/duplicate_prefix/PhysicalMemoryWrite.lean
+@@ -11 +11 @@
+-    if name.toString.endsWith suffix then some name else none
++    if ("." ++ name.toString).endsWith suffix then some name else none
+@@ -154,0 +155 @@
++  unfold writeImmediateAfterAccess
+@@ -189,0 +191 @@
++  unfold writeImmediateAfterAccess
+--- a/examples/duplicate_prefix/S04ReturnWindowMemory.lean
++++ b/examples/duplicate_prefix/S04ReturnWindowMemory.lean
+@@ -83,0 +84 @@
++  unfold writeImmediateAfterAccess
+--- a/examples/duplicate_prefix/S04ReturnUninitMemory.lean
++++ b/examples/duplicate_prefix/S04ReturnUninitMemory.lean
+@@ -33,0 +34 @@
++  unfold writeImmediateAfterAccess
+--- a/examples/duplicate_prefix/S04ReturnGhostRead.lean
++++ b/examples/duplicate_prefix/S04ReturnGhostRead.lean
+@@ -31,0 +32 @@
++  unfold readImmediateAfterAccess
+@@ -66 +66,0 @@
+-  simp only [Bind.bind, Pure.pure, Id.instMonad]
