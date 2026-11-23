@@ -42,8 +42,8 @@ theorem gotoNopReturn :
       finalPost noError := by
   vcgen [advance, stopCheck]
   subst_vars
-  change stepPre ControlTests.stepHooks (fun _ _ => True) true
-    (wp (Program.seq advance (Program.seq advance stopCheck)) finalPost noError) noError entry
+  apply (stepPre_iff_driverPre ControlTests.stepHooks (fun _ _ => True) true
+    (wp (Program.seq advance (Program.seq advance stopCheck)) finalPost noError) noError entry).mp
   refine ⟨⟨(), trivial⟩, ?_⟩
   rintro ⟨⟩ _
   change true = true ∧
@@ -101,11 +101,73 @@ end MiriTests.Verification.StepWP
 /-! Check that default vcgen selects the opcode rules for symbolic inputs. -/
 namespace MiriTests.Verification.InstructionSpecs
 
-open Miri.Interpreter Miri.MIR Miri.Verification.StepWP Std.WP
+open Miri.Interpreter Miri.MIR Miri.Verification Miri.Verification.StepWP Std.WP
 set_option experimental.vcgen true
 variable {P L E M C V : Type}
 local notation "S" => StepState P L E M
 local notation "H" => StepHooks P L E M C V
+
+example (hooks : H) (allowed : S → C → Prop) (more : Bool) (before : S)
+    (post : Unit → S → Prop) (onError : StepError → S → Prop)
+    (enabled : ∃ choice, allowed before choice)
+    (checked : ∀ after result, Step.AllowedStep hooks allowed before after result →
+      match result with
+      | .ok actual => actual = more ∧ post () after
+      | .error error => onError error after) :
+    Triple (Program.step (hooks := hooks) (allowed := allowed) more)
+      (· = before) post onError := by
+  vcgen
+  rename_i state equal
+  subst state
+  apply (stepPre_iff_driverPre hooks allowed more (post ()) onError before).mp
+  exact (stepPre_iff_allowedStep hooks allowed more (post ()) onError before).mpr ⟨enabled, checked⟩
+
+example (hooks : H) (allowed : S → C → Prop) (before : S)
+    (post : Bool → S → Prop) (onError : StepError → S → Prop)
+    (checked : ∀ after result, Step.AllowedStep hooks allowed before after result →
+      InstructionWP.resultPre post onError (after, result)) :
+    Triple (OutcomeStep.step (hooks := hooks) (allowed := allowed))
+      (· = before) post onError := by
+  vcgen
+  rename_i state equal
+  subst state
+  exact (driverOutcomePre_iff hooks allowed post onError before).mpr checked
+
+/-- The generated error condition observes the state left by the pre-hook. -/
+example (hooks : H) (allowed : S → C → Prop) (before : S)
+    (frame : Frame P L E) (loc : Location) (block : BasicBlock) (error : StepError)
+    (post : Bool → S → Prop) (onError : StepError → S → Prop)
+    (current : before.stack.currentFrame? = some frame) (pc : frame.location = .mir loc)
+    (selected : frame.body.basicBlocks[loc.block]? = some block)
+    (slot : block.statements[loc.statementIndex]? = none)
+    (failed : ∀ choice, allowed before choice → ∃ after,
+      hooks.beforeTerminator choice before = (after, .error error) ∧ onError error after) :
+    Triple (OutcomeStep.step (hooks := hooks) (allowed := allowed))
+      (· = before) post onError := by
+  vcgen
+  rename_i state equal
+  subst state
+  intro choice permitted
+  obtain ⟨after, outcome, checked⟩ := failed choice permitted
+  simpa only [driverChoicePre, driverChoicePreWith, current, pc, selected, slot,
+    terminatorStepPre, outcome, InstructionWP.resultPre] using checked
+
+/-- No choices are needed for the permitted-outcomes specification. -/
+example (hooks : H) (before : S) :
+    driverOutcomePre hooks (fun _ _ => False) (fun _ _ => False) (fun _ _ => False) before := by
+  intro choice impossible
+  exact impossible.elim
+
+example (hooks : H) (allowed : S → C → Prop) (kind : StatementKind) (before : S)
+    (post : Unit → S → Prop) (onError : StepError → S → Prop)
+    (ready : Instruction.matches (.statement kind) before)
+    (checked : driverPre hooks allowed true (post ()) onError before) :
+    Triple (Program.instruction (hooks := hooks) (allowed := allowed) (.statement kind))
+      (· = before) post onError := by
+  vcgen
+  rename_i state equal
+  subst state
+  exact ⟨ready, checked⟩
 
 example (hooks : H) (allowed : S → C → Prop) (post : Unit → S → Prop)
     (onError : StepError → S → Prop) (before : S)

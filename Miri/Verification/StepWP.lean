@@ -1,4 +1,5 @@
 import Miri.Verification.FunctionBody
+import Miri.Verification.InstructionWP
 import Std.Tactic.Do
 import Std.WP
 
@@ -58,13 +59,15 @@ inductive Program (hooks : Hooks) (allowed : State → C → Prop) where
 
 variable {hooks : StepHooks P L E M C V} {allowed : StepState P L E M → C → Prop}
 
-/-- The control instructions with a registered driver rule. -/
+/-- Lower every terminator to a checked driver step. Unsupported interpreter
+operations still produce their original error outcomes. -/
 def lowerTerminator : TerminatorKind → Option Instruction
   | .Return => some .ret
   | .Goto target hints => some (.goto target hints)
-  | kind@(.SwitchInt ..) | kind@(.Assert ..) | kind@(.Call ..) | kind@(.Drop ..) =>
-    some (.terminator kind)
-  | _ => none
+  | kind@(.SwitchInt ..) | kind@(.Assert ..) | kind@(.Call ..) | kind@(.Drop ..)
+  | kind@(.UnwindResume) | kind@(.UnwindTerminate ..) | kind@(.Unreachable) | kind@(.TailCall ..)
+  | kind@(.Yield ..) | kind@(.CoroutineDrop) | kind@(.FalseEdge ..) | kind@(.FalseUnwind ..)
+  | kind@(.InlineAsm ..) => some (.terminator kind)
 
 /-- Lower a block up to and including its terminator. The postcondition observes
 the actual successor state, so branch targets need not be evaluated here. -/
@@ -104,6 +107,195 @@ theorem stepPre_outcome {hooks : Hooks} {allowed : State → C → Prop} {more :
     | .error error => onError error after := by
   obtain ⟨choice, permitted, outcome⟩ := hstep
   cases result <;> simpa only [outcome] using h.2 choice permitted
+
+/-- A driver step must be enabled and meet its postconditions on every
+permitted successor or failed state. -/
+theorem stepPre_iff_allowedStep (hooks : Hooks) (allowed : State → C → Prop) (more : Bool)
+    (post : State → Prop) (onError : StepError → State → Prop) (before : State) :
+    stepPre hooks allowed more post onError before ↔
+      (∃ choice, allowed before choice) ∧
+        ∀ after result, Step.AllowedStep hooks allowed before after result →
+          match result with
+          | .ok actual => actual = more ∧ post after
+          | .error error => onError error after := by
+  constructor
+  · intro h
+    refine ⟨h.1, fun after result taken => ?_⟩
+    cases result <;> exact stepPre_outcome h taken
+  · rintro ⟨enabled, checked⟩
+    refine ⟨enabled, fun choice permitted => ?_⟩
+    rcases outcome : Step.step hooks choice before with ⟨after, result⟩
+    cases result <;> simpa only [outcome] using checked after _ ⟨choice, permitted, outcome⟩
+
+/-- Pull back the postconditions through a statement and then through the
+driver's checks on the frame left by the statement. -/
+def statementStepPre (hooks : Hooks) (choice : C) (kind : StatementKind)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) : Prop :=
+  InstructionWP.statementPre hooks choice kind
+    (InstructionWP.finishStatementResultPre (before.stack.frames.size - 1) post onError)
+    onError before
+
+theorem statementStepPre_iff (hooks : Hooks) (choice : C) (stmt : Statement)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) :
+    statementStepPre hooks choice stmt.kind post onError before ↔
+      InstructionWP.resultPre post onError
+        (Step.finishStatement (before.stack.frames.size - 1)
+          (Step.evalStatement hooks choice stmt before)) := by
+  unfold statementStepPre
+  rw [InstructionWP.statementPre_iff]
+  rcases outcome : Step.evalStatement hooks choice stmt before with ⟨after, result⟩
+  cases result with
+  | error => rfl
+  | ok value =>
+    cases value
+    exact InstructionWP.finishStatementResultPre_iff _ _ _ _
+
+/-- The terminator pre-hook can fail before dispatch. Its successful output
+becomes the input to the originally selected terminator. -/
+def terminatorStepPre (hooks : Hooks) (choice : C) (term : Terminator)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) : Prop :=
+  InstructionWP.resultPre (fun _ ready =>
+    InstructionWP.resultPre (fun _ => post true) onError
+      (hooks.terminator choice term ready)) onError (hooks.beforeTerminator choice before)
+
+private theorem resultPre_map_more (post : Bool → State → Prop)
+    (onError : StepError → State → Prop) (outcome : StepResult State Unit) :
+    InstructionWP.resultPre (fun _ => post true) onError outcome ↔
+      InstructionWP.resultPre post onError (outcome.1, outcome.2.map fun _ => true) := by
+  rcases outcome with ⟨after, result⟩
+  cases result <;> rfl
+
+theorem terminatorStepPre_iff (hooks : Hooks) (choice : C) (term : Terminator)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) :
+    terminatorStepPre hooks choice term post onError before ↔
+      InstructionWP.resultPre post onError (Step.runTerminator hooks choice term before) := by
+  unfold terminatorStepPre Step.runTerminator
+  rcases hook : hooks.beforeTerminator choice before with ⟨ready, result⟩
+  cases result with
+  | error => rfl
+  | ok => exact resultPre_map_more post onError (hooks.terminator choice term ready)
+
+/-- Dispatch once on the pre-step frame and MIR slot, with continuations for
+the three interpreter callbacks. -/
+def driverChoicePreWith (statement : StatementKind → Prop) (terminator : Terminator → Prop)
+    (unwinding : Prop) (post : Bool → State → Prop) (onError : StepError → State → Prop)
+    (before : State) : Prop :=
+  match before.stack.currentFrame? with
+  | none => post false before
+  | some frame =>
+    match frame.location with
+    | .unwinding _ => unwinding
+    | .mir loc =>
+      match frame.body.basicBlocks[loc.block]? with
+      | none => onError (.invalidBlock loc.block) before
+      | some block =>
+        match block.statements[loc.statementIndex]? with
+        | some stmt => statement stmt.kind
+        | none => terminator block.terminator
+
+theorem driverChoicePreWith_congr {statement statement' : StatementKind → Prop}
+    {terminator terminator' : Terminator → Prop} {unwinding unwinding' : Prop}
+    (statementEq : ∀ kind, statement kind ↔ statement' kind)
+    (terminatorEq : ∀ term, terminator term ↔ terminator' term)
+    (unwindEq : unwinding ↔ unwinding') (post : Bool → State → Prop)
+    (onError : StepError → State → Prop) (before : State) :
+    driverChoicePreWith statement terminator unwinding post onError before ↔
+      driverChoicePreWith statement' terminator' unwinding' post onError before := by
+  rw [funext fun kind => propext (statementEq kind),
+    funext fun term => propext (terminatorEq term), propext unwindEq]
+
+/-- The continuation for one choice, covering every frame and location path. -/
+def driverChoicePre (hooks : Hooks) (choice : C)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) : Prop :=
+  driverChoicePreWith
+    (fun kind => statementStepPre hooks choice kind post onError before)
+    (fun term => terminatorStepPre hooks choice term post onError before)
+    (InstructionWP.resultPre (fun _ => post true) onError
+      (hooks.returnFromCurrentFrame choice true before))
+    post onError before
+
+theorem driverChoicePre_iff (hooks : Hooks) (choice : C)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) :
+    driverChoicePre hooks choice post onError before ↔
+      InstructionWP.resultPre post onError (Step.step hooks choice before) := by
+  cases current : before.stack.currentFrame? with
+  | none => simp [driverChoicePre, driverChoicePreWith, Step.step, current, InstructionWP.resultPre]
+  | some frame =>
+    cases location : frame.location with
+    | unwinding =>
+      simp only [driverChoicePre, driverChoicePreWith, Step.step, current, location, Id.run, pure, Pure.pure]
+      exact resultPre_map_more post onError (hooks.returnFromCurrentFrame choice true before)
+    | mir loc =>
+      cases found : frame.body.basicBlocks[loc.block]? with
+      | none => simp [driverChoicePre, driverChoicePreWith, Step.step, current, location, found, InstructionWP.resultPre]
+      | some block =>
+        cases slot : block.statements[loc.statementIndex]? with
+        | none =>
+          simpa only [driverChoicePre, driverChoicePreWith, Step.step, current, location, found, slot, Id.run, pure, Pure.pure]
+            using terminatorStepPre_iff hooks choice block.terminator post onError before
+        | some stmt =>
+          simpa only [driverChoicePre, driverChoicePreWith, Step.step, current, location, found, slot, Id.run, pure, Pure.pure]
+            using statementStepPre_iff hooks choice stmt post onError before
+
+/-- All permitted step outcomes meet the continuations. This predicate holds
+vacuously when there are no permitted choices. -/
+def driverOutcomePre (hooks : Hooks) (allowed : State → C → Prop)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) : Prop :=
+  ∀ choice, allowed before choice → driverChoicePre hooks choice post onError before
+
+theorem driverOutcomePre_iff (hooks : Hooks) (allowed : State → C → Prop)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) (before : State) :
+    driverOutcomePre hooks allowed post onError before ↔
+      ∀ after result, Step.AllowedStep hooks allowed before after result →
+        InstructionWP.resultPre post onError (after, result) := by
+  constructor
+  · rintro checked after result ⟨choice, permitted, outcome⟩
+    rw [← outcome]
+    exact (driverChoicePre_iff hooks choice post onError before).mp (checked choice permitted)
+  · intro checked choice permitted
+    apply (driverChoicePre_iff hooks choice post onError before).mpr
+    rcases outcome : Step.step hooks choice before with ⟨after, result⟩
+    exact checked after result ⟨choice, permitted, outcome⟩
+
+/-- A one-step command whose postconditions can inspect the driver flag and
+the failed state. Its WP quantifies over all permitted outcomes. -/
+inductive OutcomeStep (hooks : Hooks) (allowed : State → C → Prop) where
+  | step
+
+instance : WP (OutcomeStep hooks allowed) Bool (State → Prop) (StepError → State → Prop) where
+  wpTrans _ := ⟨driverOutcomePre hooks allowed⟩
+  wp_trans_monotone := by
+    intro _ post post' onError onError' herror hpost before checked
+    apply (driverOutcomePre_iff hooks allowed post' onError' before).mpr
+    intro after result outcome
+    have valid := (driverOutcomePre_iff hooks allowed post onError before).mp checked after result outcome
+    cases result with
+    | ok actual => exact hpost actual after valid
+    | error error => exact herror error after valid
+
+@[spec] theorem spec_outcomeStep (hooks : Hooks) (allowed : State → C → Prop)
+    (post : Bool → State → Prop) (onError : StepError → State → Prop) :
+    Triple (OutcomeStep.step (hooks := hooks) (allowed := allowed))
+      (driverOutcomePre hooks allowed post onError) post onError :=
+  Triple.iff.mpr (fun _ h => h)
+
+/-- The existing step-program WP also requires the step to be enabled and
+fixes the expected success flag. -/
+def driverPre (hooks : Hooks) (allowed : State → C → Prop) (more : Bool)
+    (post : State → Prop) (onError : StepError → State → Prop) (before : State) : Prop :=
+  (∃ choice, allowed before choice) ∧
+    driverOutcomePre hooks allowed (fun actual after => actual = more ∧ post after) onError before
+
+theorem stepPre_iff_driverPre (hooks : Hooks) (allowed : State → C → Prop) (more : Bool)
+    (post : State → Prop) (onError : StepError → State → Prop) (before : State) :
+    stepPre hooks allowed more post onError before ↔
+      driverPre hooks allowed more post onError before := by
+  unfold stepPre transitionPre driverPre driverOutcomePre
+  exact and_congr_right fun _ => forall_congr' fun choice =>
+    forall_congr' fun _ => by
+      rw [driverChoicePre_iff]
+      rcases outcome : Step.step hooks choice before with ⟨after, result⟩
+      cases result <;> simp only [outcome, InstructionWP.resultPre]
 
 /-- A direct call uses the supplied preparation action, then follows real
 driver steps until the callee leaves scope. Every successful scope exit must
@@ -206,11 +398,17 @@ instance : WP (Program hooks allowed) Unit (StepState P L E M → Prop)
     intro post post' onError onError' herror hpost
     exact pre_mono program (hpost ()) herror
 
-@[spec] theorem spec_step (hooks : Hooks) (allowed : State → C → Prop) (more : Bool)
+theorem spec_step (hooks : Hooks) (allowed : State → C → Prop) (more : Bool)
     (post : Unit → State → Prop) (onError : StepError → State → Prop) :
     Triple (Program.step (hooks := hooks) (allowed := allowed) more)
       (stepPre hooks allowed more (post ()) onError) post onError :=
-  Triple.iff.mpr (by intro _ h; exact h)
+  Triple.iff.mpr (fun _ h => h)
+
+@[spec] theorem spec_driverStep (hooks : Hooks) (allowed : State → C → Prop) (more : Bool)
+    (post : Unit → State → Prop) (onError : StepError → State → Prop) :
+    Triple (Program.step (hooks := hooks) (allowed := allowed) more)
+      (driverPre hooks allowed more (post ()) onError) post onError :=
+  Triple.iff.mpr (fun before => (stepPre_iff_driverPre hooks allowed more (post ()) onError before).mpr)
 
 @[spec] theorem spec_seq (first next : Program hooks allowed)
     (post : Unit → State → Prop) (onError : StepError → State → Prop) :
@@ -218,12 +416,31 @@ instance : WP (Program hooks allowed) Unit (StepState P L E M → Prop)
       post onError :=
   Triple.iff.mpr (by intro _ h; exact h)
 
-@[spec low] theorem spec_instruction (hooks : Hooks) (allowed : State → C → Prop)
+/-- A checked instruction requires the selected MIR to match, then uses the
+same exact driver conditions as an unguarded step. -/
+def instructionPre (hooks : Hooks) (allowed : State → C → Prop) (operation : Instruction)
+    (post : State → Prop) (onError : StepError → State → Prop) (before : State) : Prop :=
+  operation.matches before ∧ driverPre hooks allowed true post onError before
+
+theorem instructionPre_iff (hooks : Hooks) (allowed : State → C → Prop) (operation : Instruction)
+    (post : State → Prop) (onError : StepError → State → Prop) (before : State) :
+    instructionPre hooks allowed operation post onError before ↔
+      pre (.instruction (hooks := hooks) (allowed := allowed) operation) post onError before :=
+  and_congr_right fun _ => (stepPre_iff_driverPre hooks allowed true post onError before).symm
+
+theorem spec_instruction (hooks : Hooks) (allowed : State → C → Prop)
     (operation : Instruction) (post : Unit → State → Prop) (onError : StepError → State → Prop) :
     Triple (Program.instruction (hooks := hooks) (allowed := allowed) operation)
-      (fun state => operation.matches state ∧ stepPre hooks allowed true (post ()) onError state)
+      (fun before => operation.matches before ∧ stepPre hooks allowed true (post ()) onError before)
       post onError :=
-  Triple.iff.mpr (by intro _ h; exact h)
+  Triple.iff.mpr (fun _ h => h)
+
+@[spec low] theorem spec_checkedInstruction (hooks : Hooks) (allowed : State → C → Prop)
+    (operation : Instruction) (post : Unit → State → Prop) (onError : StepError → State → Prop) :
+    Triple (Program.instruction (hooks := hooks) (allowed := allowed) operation)
+      (instructionPre hooks allowed operation (post ()) onError)
+      post onError :=
+  Triple.iff.mpr (fun before => (instructionPre_iff hooks allowed operation (post ()) onError before).mp)
 
 private theorem statement_at {kind : StatementKind} {before : State}
     (matched : (Instruction.statement kind).matches before) :

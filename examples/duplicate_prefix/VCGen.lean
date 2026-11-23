@@ -141,6 +141,7 @@ theorem program_of_trace {K U O X Host : Type} [DecidableEq K]
     vcgen [rootProgram]
     rename_i current atEntry
     subst current
+    apply (stepPre_iff_driverPre _ _ _ _ _ state).mp
     refine ⟨⟨(), trivial⟩, ?_⟩
     rintro ⟨⟩ _
     dsimp only
@@ -160,6 +161,7 @@ theorem program_of_trace {K U O X Host : Type} [DecidableEq K]
     vcgen
     rename_i current atEntry
     subst current
+    apply (stepPre_iff_driverPre _ _ _ _ _ before).mp
     refine ⟨⟨(), trivial⟩, ?_⟩
     rintro ⟨⟩ _
     dsimp only
