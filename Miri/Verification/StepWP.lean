@@ -844,11 +844,13 @@ theorem twoInstructions_body {first second : Instruction} {start : State} {depth
     · exact False.elim (Nat.not_lt_of_ge hdepth outside)
     · exact done.2
 
-/-- Observe that the driver has no current frame. -/
+/-- Expect the driver to report that it has no current frame on success.
+A failed step still goes to the error continuation. -/
 def checkEmptyStack (hooks : Hooks) (allowed : State → C → Prop) : Program hooks allowed :=
   .step false
 
-@[spec] theorem spec_checkEmptyStack (hooks : Hooks) (allowed : State → C → Prop)
+/-- Prove an expected stop directly from an empty stack. -/
+theorem spec_checkEmptyStack (hooks : Hooks) (allowed : State → C → Prop)
     (post : Unit → State → Prop) (onError : StepError → State → Prop) :
     Triple (checkEmptyStack hooks allowed)
       (fun state => state.stack.currentFrame? = none ∧
@@ -862,5 +864,13 @@ def checkEmptyStack (hooks : Hooks) (allowed : State → C → Prop) : Program h
     | (after, .ok actual) => actual = false ∧ post () after
     | (after, .error error) => onError error after)
   simpa [Step.step, empty] using hpost
+
+/-- Generate the exact driver precondition for the expected stop, including
+errors observed while stepping a nonempty stack. -/
+@[spec] theorem spec_expectedStop (hooks : Hooks) (allowed : State → C → Prop)
+    (post : Unit → State → Prop) (onError : StepError → State → Prop) :
+    Triple (checkEmptyStack hooks allowed)
+      (driverPre hooks allowed false (post ()) onError) post onError :=
+  spec_driverStep hooks allowed false post onError
 
 end Miri.Verification.StepWP

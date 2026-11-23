@@ -76,13 +76,31 @@ example (state : ControlTests.S) :
       (fun _ after => after = state) noError := by
   vcgen
   rename_i before h
-  exact ⟨h.2, ⟨(), trivial⟩, h.1⟩
+  refine ⟨⟨(), trivial⟩, ?_⟩
+  intro choice permitted
+  simpa [driverChoicePre, driverChoicePreWith, h.2] using h.1
+
+/-- The fixture's first step succeeds, but its Goto is not a checked Return. -/
+example : stepPre ControlTests.stepHooks (fun _ _ => True) true (fun _ => True) noError entry ∧
+    ¬ wp (Program.instruction (hooks := ControlTests.stepHooks) (allowed := fun _ _ => True) .ret)
+      (fun _ _ => True) noError entry := by
+  refine ⟨⟨⟨(), trivial⟩, fun _ _ => ⟨rfl, trivial⟩⟩, ?_⟩
+  intro checked
+  have matched := (show Instruction.ret.matches entry ∧
+      stepPre ControlTests.stepHooks (fun _ _ => True) true (fun _ => True) noError entry from checked).1
+  cases matched
 
 /-- An empty set of permitted choices fails even with trivial postconditions. -/
 example : ¬ stepPre ControlTests.stepHooks (fun _ _ => False) true
     (fun _ => True) (fun _ _ => True) entry := by
   rintro ⟨⟨_, permitted⟩, _⟩
   exact permitted
+
+/-- An outcome-only step holds vacuously when no step is permitted. -/
+example : wp (OutcomeStep.step (hooks := ControlTests.stepHooks) (allowed := fun _ _ => False))
+    (fun _ _ => False) (fun _ _ => False) entry := by
+  intro _ allowed
+  contradiction
 
 private def unsupportedHooks := { ControlTests.stepHooks with
   beforeTerminator := fun _ state => (ControlTests.log 99 state, .error (.unsupported "fixture")) }
@@ -95,6 +113,18 @@ example : stepPre unsupportedHooks (fun _ _ => True) true (fun _ => False)
 example : ¬ stepPre unsupportedHooks (fun _ _ => True) true (fun _ => True) noError entry := by
   intro safe
   exact safe.2 () trivial
+
+/-- An expected stop allows a step's accepted error even with a current frame. -/
+example : entry.stack.currentFrame?.isSome = true ∧
+    Triple (checkEmptyStack unsupportedHooks (fun _ _ => True)) (· = entry)
+      (fun _ _ => False)
+      (fun error state => error = .unsupported "fixture" ∧ state.machine = [99]) := by
+  refine ⟨rfl, ?_⟩
+  vcgen
+  subst_vars
+  exact (stepPre_iff_driverPre unsupportedHooks (fun _ _ => True) false
+    (fun _ => False) (fun error state => error = .unsupported "fixture" ∧ state.machine = [99])
+    entry).mp ⟨⟨(), trivial⟩, fun _ _ => ⟨rfl, rfl⟩⟩
 
 end MiriTests.Verification.StepWP
 

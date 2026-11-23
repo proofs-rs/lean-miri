@@ -65,4 +65,61 @@ example {K U C O X Host : Type} [DecidableEq K]
       (Miri.Verification.CanonicalStepWP.outcomePre config limits allowed post onError) post onError := by
   vcgen <;> assumption
 
+open Miri.ABI Miri.Memory Miri.TreeBorrows Miri.Verification in
+/-- A Return stops on the protector-release error before copying or removing
+the frame. The failed status is reported after writing back the tree. -/
+theorem canonicalReturnProtectorFailure {K U O X Host : Type} [DecidableEq K]
+    (config : ExecutionMachine.Config K U Unit O X Host) (limits : ExecutionMachine.Limits)
+    (before : MachineHooks.State K U) (frame : Frame Provenance LocalLayout MachineHooks.FrameExtra)
+    (loc : Location) (block : BasicBlock) (value : OpTy Provenance)
+    (tracker : MachineHooks.BorrowState) (owned : FrameState)
+    (id : AllocId) (tag : BorTag) (info : AllocationInfo)
+    (entry : LocalAllocation Provenance BorrowTree K) (updated : MemoryState Provenance BorrowTree K)
+    (post : Bool → MachineHooks.State K U → Prop)
+    (onError : StepError → MachineHooks.State K U → Prop)
+    (current : before.stack.currentFrame? = some frame)
+    (pc : frame.location = .mir loc) (selected : frame.body.basicBlocks[loc.block]? = some block)
+    (slot : block.statements[loc.statementIndex]? = none) (opcode : block.terminator.kind = .Return)
+    (notCleanup : block.cleanup = false)
+    (prepared : let checked := ExecutionMachine.withValidation config limits
+      TerminatorMachine.beforeTerminatorWithChoice checked.terminators (checked.preemptionChoice ()) before =
+        .ok () before)
+    (read : (ExecutionMachine.terminatorHooks config limits).returnOperand () before = (before, .ok value))
+    (enabled : before.machine.borrowTracker = some tracker)
+    (ownedFrame : frame.extra.borrowTracker = some owned) (ownedTags : owned.protectedTags = #[(id, tag)])
+    (liveInfo : before.machine.memory.getAllocInfo id = .ok info) (liveKind : info.kind = .liveData)
+    (ensured : let checked := ExecutionMachine.withValidation config limits
+      (TypedMachineBindings.retagHooks checked.access checked.retag).ensureTreeExtra id before = .ok () before)
+    (located : before.machine.memory.live.find? (fun entry => entry.1 == id) = some (id, entry))
+    (missing : entry.allocation.extra.indexOfTag tag = none)
+    (writeback : before.machine.memory.setLiveAllocation id
+      (entry.allocation.setExtra entry.allocation.extra) = .ok updated)
+    (classified : onError
+      (.invalidProgram s!"protector release invariant: {reprStr (BorrowTree.ProtectorReleaseStatus.MissingTag tag)}")
+      { before with machine := { before.machine with memory := updated } }) :
+    Triple (OutcomeStep.step (hooks := ExecutionMachine.stepHooks config limits) (allowed := fun _ _ => True))
+      (· = before) post onError := by
+  vcgen
+  rename_i state atEntry
+  subst state
+  intro choice _
+  cases choice
+  have returned : CanonicalStepWP.returnPre config limits () false (post true) onError before := by
+    simp only [CanonicalStepWP.returnPre, InstructionWP.returnPreWithEffects, current, pc,
+      selected, notCleanup, show (false != false) = false from rfl, Bool.false_eq_true, ↓reduceIte]
+    change InstructionWP.resultPre _ onError
+      ((ExecutionMachine.terminatorHooks config limits).returnOperand () before)
+    rw [read]
+    dsimp only at ensured
+    simp only [InstructionWP.resultPre, ProtectorReleaseWP.popRawPre, ProtectorReleaseWP.beforeStackPopPre,
+      enabled, current, Option.isSome_some, ↓reduceIte,
+      ownedFrame, ownedTags, ProtectorReleaseWP.stackEntriesPre, ProtectorReleaseWP.stackEntryPre,
+      liveInfo, liveKind, beq_self_eq_true, RvalueWP.actionPre, ensured, located,
+      ProtectorReleaseWP.releasePre, missing, writeback]
+    simpa only [enabled, reprStr] using classified
+  simp only [CanonicalStepWP.choicePre, driverChoicePreWith, current, pc, selected, slot,
+    CanonicalStepWP.terminatorPre, ← RvalueWP.actionPre_eq_wp, RvalueWP.actionPre, prepared,
+    CanonicalStepWP.selectedTerminatorPre, opcode, InstructionWP.terminatorPreWithReturn]
+  exact returned
+
 end MiriTests.Verification.CallReturnWP

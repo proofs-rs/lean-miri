@@ -3056,15 +3056,356 @@ def mergeAfterCollectPre (tree : BorrowTree) (post : BorrowTree → Prop)
   | .error error => failure (.RangeMerge error) after
   | .ok () => post after
 
+/-- Remove a dead leaf or splice a compatible replacement into its parent.
+The state includes the list of children retained so far in source order. -/
+def collectChild (live : Array BorTag) (parent child : UniIndex) (current : BorrowTree)
+    (kept : Array UniIndex) : BorrowTree × Array UniIndex × Except TreeGcError Unit := Id.run do
+  if nodeIsUseless current child live then
+    let (after, outcome) := removeUselessNode current child
+    return (after, kept, outcome)
+  match replacementChild? current child live with
+  | none => return (current, kept.push child, .ok ())
+  | some replacement =>
+    let (after, outcome) := removeUselessNode current child
+    match outcome with
+    | .error error => return (after, kept, .error error)
+    | .ok () =>
+      let some node := after.nodes.get replacement
+        | return (after, kept, .error (.MissingReplacementChild replacement))
+      let nodes := after.nodes.insert replacement { node with parent := some parent }
+      return ({ after with nodes }, kept.push replacement, .ok ())
+
+private theorem remove_node_size (tree : BorrowTree) (index : UniIndex) :
+    (removeUselessNode tree index).1.nodes.size = tree.nodes.size := by
+  unfold removeUselessNode
+  cases tree.nodes.get index with
+  | none => rfl
+  | some node =>
+    simp only [Id.run, pure, Pure.pure, UniValMap.remove]
+    split
+    · simp [UniValMap.size]
+    · rfl
+
+private theorem collectChild_size (live : Array BorTag) (parent child : UniIndex)
+    (current : BorrowTree) (kept : Array UniIndex) :
+    (collectChild live parent child current kept).1.nodes.size = current.nodes.size := by
+  unfold collectChild
+  split
+  · exact remove_node_size current child
+  · cases selected : replacementChild? current child live with
+    | none => rfl
+    | some replacement =>
+      let removed := removeUselessNode current child
+      have size := remove_node_size current child
+      change removed.1.nodes.size = current.nodes.size at size
+      simp only [Id.run, pure, Pure.pure, selected]
+      cases status : removed.2 with
+      | error => simpa only [removed, status] using size
+      | ok value =>
+        cases value
+        have actual : (removeUselessNode current child).2 = .ok () := status
+        simp only [actual]
+        cases found : removed.1.nodes.get replacement with
+        | none =>
+          have absent : (removeUselessNode current child).1.nodes.get replacement = none := found
+          simpa only [absent] using size
+        | some node =>
+          have present : (removeUselessNode current child).1.nodes.get replacement = some node := found
+          simp only [present]
+          exact (ZeroProtection.insert_existing_size removed.1.nodes replacement node _ found).trans size
+
+/-- Finish one postorder stack frame, with the source's node checks after all
+child edits. Each successful edit supplies the concrete successor to the next. -/
+def collectChildrenPre (live : Array BorTag) (parent : UniIndex)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop) :
+    List UniIndex → BorrowTree → Array UniIndex → Prop
+  | [], current, kept =>
+    match current.nodes.get parent with
+    | none => failure (.MissingNode parent) current
+    | some node => post { current with nodes := current.nodes.insert parent { node with children := kept } }
+  | child :: rest, current, kept =>
+    let (after, kept, outcome) := collectChild live parent child current kept
+    match outcome with
+    | .error error => failure error after
+    | .ok () => collectChildrenPre live parent post failure rest after kept
+
+private abbrev ChildCollectProgress := Option TreeGcResult × BorrowTree × Array UniIndex
+
+private def collectChildStep (live : Array BorTag) (parent child : UniIndex)
+    (state : ChildCollectProgress) : Id (ForInStep ChildCollectProgress) :=
+  let (after, kept, outcome) := collectChild live parent child state.2.1 state.2.2
+  match outcome with
+  | .error error => .done (some ⟨after, .error error⟩, after, state.2.2)
+  | .ok () => .yield (none, after, kept)
+
+private abbrev collectChildSource (live : Array BorTag) (parent child : UniIndex)
+    (progress : ChildCollectProgress) : Id (ForInStep ChildCollectProgress) :=
+  let current := progress.2.1
+  let kept := progress.2.2
+  let removed := removeUselessNode current child
+  if nodeIsUseless current child live then
+    match removed.2 with
+    | .error error => .done (some ⟨removed.1, .error error⟩, removed.1, kept)
+    | .ok () => .yield (none, removed.1, kept)
+  else
+    match replacementChild? current child live with
+    | none => .yield (none, current, kept.push child)
+    | some replacement =>
+      match removed.2 with
+      | .error error => .done (some ⟨removed.1, .error error⟩, removed.1, kept)
+      | .ok () =>
+        match removed.1.nodes.get replacement with
+        | some node =>
+          let nextNode := { node with parent := some parent }
+          .yield (none, { removed.1 with nodes := removed.1.nodes.insert replacement nextNode },
+            kept.push replacement)
+        | _ => .done (some ⟨removed.1, .error (.MissingReplacementChild replacement)⟩, removed.1, kept)
+
+private theorem collectChildStep_eq (live : Array BorTag) (parent child : UniIndex)
+    (progress : ChildCollectProgress) :
+    collectChildSource live parent child progress = collectChildStep live parent child progress := by
+  simp only [collectChildSource, collectChildStep, collectChild, Id.run]
+  by_cases useless : nodeIsUseless progress.2.1 child live = true
+  · simp only [useless, ↓reduceIte]
+    rcases removed : removeUselessNode progress.2.1 child with ⟨tree, outcome⟩
+    cases outcome <;> simp [removed, bind, Bind.bind, pure, Pure.pure]
+  · simp only [useless, ↓reduceIte]
+    cases selected : replacementChild? progress.2.1 child live with
+    | none => simp [selected, pure, Pure.pure]
+    | some replacement =>
+      simp only [selected]
+      rcases removed : removeUselessNode progress.2.1 child with ⟨tree, outcome⟩
+      cases outcome with
+      | error => simp [removed, bind, Bind.bind, pure, Pure.pure]
+      | ok value =>
+        cases value
+        cases found : tree.nodes.get replacement <;>
+          simp [removed, found, bind, Bind.bind, pure, Pure.pure]
+
+private theorem collectChildFold_eq (live : Array BorTag) (parent : UniIndex)
+    (children : Array UniIndex) (initial : ChildCollectProgress)
+    (actual : (child : UniIndex) → child ∈ children → ChildCollectProgress → Id (ForInStep ChildCollectProgress))
+    (same : ∀ child h state, actual child h state = collectChildStep live parent child state) :
+    forIn' (m := Id) children initial actual =
+      forIn (m := Id) children.toList initial (collectChildStep live parent) := by
+  rw [Array.forIn_toList]
+  change forIn' (m := Id) children initial actual =
+    forIn' (m := Id) children initial (fun child _ state => collectChildStep live parent child state)
+  rw [show actual = _ from funext fun child => funext fun h => funext (same child h)]
+
+private theorem collectSourceFold_eq (live : Array BorTag) (parent : UniIndex)
+    (children : Array UniIndex) (initial : ChildCollectProgress) :
+    forIn' (m := Id) children initial (fun child _ progress =>
+      collectChildSource live parent child progress) =
+      forIn (m := Id) children.toList initial (collectChildStep live parent) := by
+  apply collectChildFold_eq live parent
+  intro child _ progress
+  exact collectChildStep_eq live parent child progress
+
+private def checkedFinishNode (parent : UniIndex) (progress : ChildCollectProgress)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop) : Prop :=
+  match progress.1 with
+  | some result =>
+    match result.outcome with
+    | .ok () => post result.tree
+    | .error error => failure error result.tree
+  | none =>
+    let current := progress.2.1
+    match current.nodes.get parent with
+    | none => failure (.MissingNode parent) current
+    | some node =>
+      post { current with nodes := current.nodes.insert parent { node with children := progress.2.2 } }
+
+private theorem collectChildrenPre_iff (live : Array BorTag) (parent : UniIndex)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop)
+    (children : List UniIndex) (current : BorrowTree) (kept : Array UniIndex) :
+    collectChildrenPre live parent post failure children current kept ↔
+      checkedFinishNode parent (Id.run (forIn children (none, current, kept)
+        (collectChildStep live parent))) post failure := by
+  induction children generalizing current kept with
+  | nil => rfl
+  | cons child rest ih =>
+    simp only [collectChildrenPre, List.forIn_cons, bind, Bind.bind, collectChildStep]
+    rcases childResult : collectChild live parent child current kept with ⟨after, kept, outcome⟩
+    cases outcome with
+    | error => simp [childResult, checkedFinishNode]
+    | ok value =>
+      cases value
+      simpa only [childResult] using ih after kept
+
+private theorem collectChildFold_error (live : Array BorTag) (parent : UniIndex)
+    (children : List UniIndex) (current : BorrowTree) (kept : Array UniIndex) :
+    ∀ status, (forIn (m := Id) children (none, current, kept)
+      (collectChildStep live parent)).1 = some status →
+      ∃ error, status.outcome = .error error := by
+  induction children generalizing current kept with
+  | nil => simp [List.forIn_nil, pure, Pure.pure]
+  | cons child rest ih =>
+    simp only [List.forIn_cons, bind, Bind.bind, collectChildStep]
+    rcases effect : collectChild live parent child current kept with ⟨after, kept, outcome⟩
+    cases outcome with
+    | error error =>
+      intro status equal
+      have returned : status = ⟨after, .error error⟩ := (Option.some.inj equal).symm
+      exact ⟨error, by rw [returned]⟩
+    | ok value =>
+      cases value
+      exact ih after kept
+
+private theorem collectChildrenPre_congr (live : Array BorTag) (parent : UniIndex)
+    (post post' : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop)
+    (children : List UniIndex) (current : BorrowTree) (kept : Array UniIndex)
+    (same : ∀ after, after.nodes.size = current.nodes.size → (post after ↔ post' after)) :
+    collectChildrenPre live parent post failure children current kept ↔
+      collectChildrenPre live parent post' failure children current kept := by
+  induction children generalizing current kept with
+  | nil =>
+    simp only [collectChildrenPre]
+    cases found : current.nodes.get parent with
+    | none => rfl
+    | some node =>
+      exact same _ (ZeroProtection.insert_existing_size current.nodes parent node _ found)
+  | cons child rest ih =>
+    simp only [collectChildrenPre]
+    have size := collectChild_size live parent child current kept
+    rcases childResult : collectChild live parent child current kept with ⟨after, kept, outcome⟩
+    cases outcome with
+    | error => rfl
+    | ok value =>
+      cases value
+      simp only [childResult]
+      have sameSize : after.nodes.size = current.nodes.size := by simpa only [childResult] using size
+      exact ih after kept (fun tree size => same tree (size.trans sameSize))
+
+/-- One checked cursor in the source postorder traversal. Descending advances
+the parent's cursor; completing a node applies its ordered child edits then pops. -/
+def collectWalkPre (live : Array BorTag) (root : UniIndex)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop) :
+    Nat → Nat → Array (UniIndex × Nat) → BorrowTree → Prop
+  | 0, _, stack, current =>
+    if stack.isEmpty then post current else failure (.ParentCycle root) current
+  | fuel + 1, steps, stack, current =>
+    if stack.isEmpty then post current
+    else if steps + 1 > current.nodes.size * 2 + 1 then failure (.ParentCycle root) current
+    else
+      match stack.back? with
+      | none => failure (.EmptyTraversalStack root) current
+      | some (index, childPos) =>
+        match current.nodes.get index with
+        | none => failure (.MissingNode index) current
+        | some node =>
+          if childPos < node.children.size then
+            match node.children[childPos]? with
+            | none => failure (.MissingChildPosition index childPos) current
+            | some child =>
+              collectWalkPre live root post failure fuel (steps + 1)
+                ((stack.pop.push (index, childPos + 1)).push (child, 0)) current
+          else collectChildrenPre live index
+            (collectWalkPre live root post failure fuel (steps + 1) stack.pop) failure
+            node.children.toList current #[]
+
+private abbrev CollectWalkProgress := Option TreeGcResult × BorrowTree × Array (UniIndex × Nat) × Nat
+
+/-- The exact continuation for a single root's checked postorder traversal. -/
+def collectRootPre (live : Array BorTag) (root : UniIndex) (tree : BorrowTree)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop) : Prop :=
+  collectWalkPre live root post failure (tree.nodes.size * 2 + 1) 0 #[(root, 0)] tree
+
+set_option maxHeartbeats 4000000 in
+theorem collectRootPre_iff (live : Array BorTag) (root : UniIndex) (tree : BorrowTree)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop) :
+    collectRootPre live root tree post failure ↔
+      let result := removeUselessChildren tree root live
+      match result.outcome with
+      | .ok () => post result.tree
+      | .error error => failure error result.tree := by
+  unfold collectRootPre removeUselessChildren
+  simp only [Id.run, bind, pure, ForIn.forIn]
+  name_ancestor_loop
+  let finish : CollectWalkProgress → Prop := fun result =>
+    match result.1 with
+    | none => post result.2.1
+    | some status => match status.outcome with
+      | .ok () => post status.tree
+      | .error error => failure error status.tree
+  let continueLoop := fun (tree : BorrowTree) (stack : Array (UniIndex × Nat)) (steps : Nat) =>
+    finish (Lean.Loop.forIn (m := Id) {} (none, tree, stack, steps) scan)
+  have checked (fuel steps : Nat) (stack : Array (UniIndex × Nat)) (current : BorrowTree)
+      (bounded : current.nodes.size * 2 + 1 ≤ fuel + steps) :
+      collectWalkPre live root post failure fuel steps stack current ↔ continueLoop current stack steps := by
+    induction fuel generalizing steps stack current with
+    | zero =>
+      have past : steps + 1 > current.nodes.size * 2 + 1 := by omega
+      unfold continueLoop
+      rw [Lean.Loop.forIn_eq_of_monadTail]
+      cases empty : stack.isEmpty <;>
+        simp only [collectWalkPre, scan, past, empty, Bool.not_false, Bool.not_true,
+          Bool.false_eq_true, ↓reduceIte, finish, bind, Bind.bind, pure, Pure.pure]
+    | succ fuel ih =>
+      unfold continueLoop
+      rw [Lean.Loop.forIn_eq_of_monadTail]
+      conv in (scan () (none, current, stack, steps)) => unfold scan
+      simp only [collectWalkPre]
+      cases empty : stack.isEmpty
+      · simp only [empty, Bool.not_false, Bool.false_eq_true, ↓reduceIte]
+        by_cases past : steps + 1 > current.nodes.size * 2 + 1
+        · simp only [past, ↓reduceIte, finish, bind, Bind.bind, pure, Pure.pure]
+        · simp only [past, ↓reduceIte]
+          cases top : stack.back? with
+          | none => simp only [top, finish, bind, Bind.bind, pure, Pure.pure]
+          | some frame =>
+            obtain ⟨index, position⟩ := frame
+            simp only [top]
+            cases found : current.nodes.get index with
+            | none => simp only [found, finish, bind, Bind.bind, pure, Pure.pure]
+            | some node =>
+              simp only [found]
+              by_cases descends : position < node.children.size
+              · simp only [descends, ↓reduceIte]
+                cases childEq : node.children[position]? with
+                | none => simp only [childEq, finish, bind, Bind.bind, pure, Pure.pure]
+                | some child =>
+                  simpa only [childEq, bind, Bind.bind, pure, Pure.pure, continueLoop] using
+                    ih (steps + 1) ((stack.pop.push (index, position + 1)).push (child, 0)) current (by omega)
+              · simp only [descends, ↓reduceIte]
+                have congruent := collectChildrenPre_congr live index
+                  (collectWalkPre live root post failure fuel (steps + 1) stack.pop)
+                  (fun next => continueLoop next stack.pop (steps + 1))
+                  failure node.children.toList current #[]
+                  (fun next same => ih (steps + 1) stack.pop next (by rw [same]; omega))
+                refine congruent.trans ?_
+                rw [collectChildrenPre_iff]
+                with_unfolding_all rw [collectSourceFold_eq live index]
+                simp only [Id.run]
+                have failed := collectChildFold_error live index node.children.toList current #[]
+                generalize (forIn (m := Id) node.children.toList (none, current, #[])
+                  (collectChildStep live index)) = progress at failed ⊢
+                rcases progress with ⟨returned, after, kept⟩
+                cases returned with
+                | none =>
+                  cases foundAfter : after.nodes.get index with
+                  | none => simp only [checkedFinishNode, foundAfter, finish, bind, Bind.bind, pure, Pure.pure]
+                  | some node =>
+                    simp only [checkedFinishNode, foundAfter, continueLoop, bind, Bind.bind, pure, Pure.pure]
+                | some status =>
+                  obtain ⟨error, statusEq⟩ := failed status rfl
+                  simp only [checkedFinishNode, finish, statusEq, bind, Bind.bind, pure, Pure.pure]
+      · simp only [empty, Bool.not_true, Bool.false_eq_true, ↓reduceIte, finish, bind, Bind.bind, pure, Pure.pure]
+  refine (checked (tree.nodes.size * 2 + 1) 0 #[(root, 0)] tree (by omega)).trans ?_
+  unfold continueLoop
+  generalize Lean.Loop.forIn (m := Id) {} (none, tree, #[(root, 0)], 0) scan = result
+  rcases result with ⟨returned, current, stack, steps⟩
+  cases returned with
+  | none => rfl
+  | some outcome =>
+    cases eq : outcome.outcome <;> simp only [finish, eq]
+
 /-- GC visits roots in order and only merges after every root succeeds. -/
 def collectRootsPre (live : Array BorTag) (post : BorrowTree → Prop)
     (failure : TreeGcError → BorrowTree → Prop) : List UniIndex → BorrowTree → Prop
   | [], tree => mergeAfterCollectPre tree post failure
   | root :: rest, tree =>
-    let result := removeUselessChildren tree root live
-    match result.outcome with
-    | .error error => failure error result.tree
-    | .ok () => collectRootsPre live post failure rest result.tree
+    collectRootPre live root tree (collectRootsPre live post failure rest) failure
 
 /-- Pull back the continuation across each root's ordered postorder traversal
 and the final merge of adjacent compatible location ranges. -/
@@ -3088,7 +3429,7 @@ theorem collectPre_iff (tree : BorrowTree) (live : Array BorTag)
     cases (DedupRangeMap.mergeAdjacentThorough
       (tree.locations.modifyAll fun _ loc => trimLocationForRangeEquality loc)).outcome <;> rfl
   | cons root rest ih =>
-    simp only [collectRootsPre, List.forIn_cons, bind, Bind.bind, pure, Pure.pure]
+    simp only [collectRootsPre, collectRootPre_iff, List.forIn_cons, bind, Bind.bind, pure, Pure.pure]
     cases processed : (removeUselessChildren tree root live).outcome with
     | error => simp only [processed]
     | ok value =>
@@ -3123,16 +3464,111 @@ def childSegmentPre (positioned : RangeMapSegment Tree.LocationState) (offset : 
           | .error error => failure (.RangeMapError error) after
           | .ok () => next after smallest
 
+/-- Pull back through the source ancestor walk. A terminating node still
+updates its cached SIFA and materialized locations. The fuel mirrors the
+interpreter's checked parent-cycle bound on well-formed and malformed trees. -/
+def weakenAncestorPre (start : UniIndex) (strongest : IdempotentForeignAccess)
+    (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop) :
+    Nat → Nat → Option UniIndex → BorrowTree → Prop
+  | 0, _, cursor, current => failure (.ParentCycle (cursor.getD start)) current
+  | fuel + 1, steps, cursor, current =>
+    if steps > current.nodes.size then failure (.ParentCycle (cursor.getD start)) current
+    else
+      match cursor with
+      | none => post current
+      | some index =>
+        match current.nodes.get index with
+        | none => failure (.MissingNode index) current
+        | some node =>
+          let next := ZeroProtection.weakened current index node strongest
+          if ZeroProtection.changed current index node strongest then
+            weakenAncestorPre start strongest post failure fuel (steps + 1) node.parent next
+          else post next
+
+def weakenAncestorsPre (tree : BorrowTree) (start : UniIndex) (strongest : IdempotentForeignAccess)
+    (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop) : Prop :=
+  if strongest == .Write then post tree
+  else weakenAncestorPre start strongest post failure (tree.nodes.size + 1) 0 (some start) tree
+
+set_option maxHeartbeats 2500000 in
+theorem weakenAncestorsPre_iff (tree : BorrowTree) (start : UniIndex)
+    (strongest : IdempotentForeignAccess) (post : BorrowTree → Prop)
+    (failure : ChildInsertError → BorrowTree → Prop) :
+    weakenAncestorsPre tree start strongest post failure ↔
+      let result := updateSifaAfterRetag tree start strongest
+      match result.2 with
+      | .error error => failure error result.1
+      | .ok () => post result.1 := by
+  unfold weakenAncestorsPre updateSifaAfterRetag
+  split
+  · rfl
+  · simp only [Id.run, bind, pure, ForIn.forIn]
+    name_ancestor_loop
+    let finish : ZeroProtection.LoopState → Prop := fun result =>
+      match result.1 with
+      | none => post result.2.1
+      | some (after, .ok ()) => post after
+      | some (after, .error error) => failure error after
+    have inactive (current : BorrowTree) (cursor : Option UniIndex) (steps : Nat) :
+        finish (Lean.Loop.forIn (m := Id) {} (none, current, cursor, steps, false) scan) ↔ post current := by
+      rw [Lean.Loop.forIn_eq_of_monadTail]
+      rfl
+    have exactLoop (fuel steps : Nat) (cursor : Option UniIndex) (current : BorrowTree)
+        (bounded : current.nodes.size + 1 ≤ fuel + steps) :
+        weakenAncestorPre start strongest post failure fuel steps cursor current ↔
+          finish (Lean.Loop.forIn (m := Id) {} (none, current, cursor, steps, true) scan) := by
+      induction fuel generalizing steps cursor current with
+      | zero =>
+        have past : steps > current.nodes.size := by omega
+        rw [Lean.Loop.forIn_eq_of_monadTail]
+        simp only [weakenAncestorPre, scan, past, ↓reduceIte, bind, Bind.bind, pure, Pure.pure, finish]
+      | succ fuel ih =>
+        rw [Lean.Loop.forIn_eq_of_monadTail]
+        by_cases past : steps > current.nodes.size
+        · simp only [weakenAncestorPre, scan, past, ↓reduceIte, bind, Bind.bind, pure, Pure.pure, finish]
+        · cases cursor with
+          | none =>
+            simpa only [weakenAncestorPre, scan, past, ↓reduceIte, bind, Bind.bind, pure, Pure.pure]
+              using (inactive current none steps).symm
+          | some index =>
+            cases found : current.nodes.get index with
+            | none =>
+              simp only [weakenAncestorPre, scan, past, found, ↓reduceIte,
+                bind, Bind.bind, pure, Pure.pure, finish]
+            | some node =>
+              let next := ZeroProtection.weakened current index node strongest
+              have nextSize : next.nodes.size = current.nodes.size :=
+                ZeroProtection.insert_existing_size current.nodes index node _ found
+              have casesEq : scan () (none, current, some index, steps, true) =
+                  if ZeroProtection.changed current index node strongest then
+                    .yield (none, next, node.parent, steps + 1, true)
+                  else .yield (none, next, some index, steps, false) := by
+                simp only [scan, ite_eq_left rfl, ite_eq_right past, found]
+                change (if ZeroProtection.changed current index node strongest then _ else _) = _
+                rfl
+              rw [casesEq]
+              simp only [weakenAncestorPre, past, ↓reduceIte, found]
+              cases changed : ZeroProtection.changed current index node strongest
+              · simpa only [changed, Bool.false_eq_true, ↓reduceIte, bind, Bind.bind]
+                  using (inactive next (some index) steps).symm
+              · simpa only [changed, ↓reduceIte, bind, Bind.bind]
+                  using ih (steps + 1) node.parent next (by rw [nextSize]; omega)
+    have checked := exactLoop (tree.nodes.size + 1) 0 (some start) tree (by omega)
+    refine checked.trans ?_
+    generalize Lean.Loop.forIn (m := Id) {} (none, tree, some start, 0, true) scan = result
+    rcases result with ⟨returned, current, cursor, steps, active⟩
+    cases returned with
+    | none => rfl
+    | some outcome =>
+      rcases outcome with ⟨after, status⟩
+      cases status <;> rfl
+
 def finishChildPre (parent : Option UniIndex) (tree : BorrowTree)
     (minimumSifa : IdempotentForeignAccess) (post : BorrowTree → Prop)
     (failure : ChildInsertError → BorrowTree → Prop) : Prop :=
   match parent with
   | none => post tree
-  | some parent =>
-    let (after, outcome) := updateSifaAfterRetag tree parent minimumSifa
-    match outcome with
-    | .error error => failure error after
-    | .ok () => post after
+  | some parent => weakenAncestorsPre tree parent minimumSifa post failure
 
 def childSegmentsPre (offset : Size) (index : UniIndex) (parent : Option UniIndex)
     (held : Bool) (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop) :
@@ -3249,8 +3685,7 @@ private theorem childSegmentsPre_iff (offset : Size) (index : UniIndex) (parent 
     cases parent with
     | none => rfl
     | some parent =>
-      rcases updateSifaAfterRetag tree parent minimumSifa with ⟨after, outcome⟩
-      cases outcome <;> rfl
+      simpa only [childResultPre] using weakenAncestorsPre_iff tree parent minimumSifa post failure
   | cons segment rest ih =>
     simp only [childSegmentsPre, childSegmentPre, insertChildSegments, List.forIn_cons,
       bind, Bind.bind, Id.run, pure, Pure.pure]

@@ -304,14 +304,183 @@ theorem returnPre_iff (config : Config) (limits : Limits) (choice : C) (unwindin
     rw [cleanupFramePre_iff]
     exact RvalueWP.actionPre_run _ _ _ _
 
+omit [DecidableEq K] in
+private theorem callbackWP_iff {A : Type} (run : State → StepResult State A)
+    (post : A → State → Prop) (onError : Errors) (before : State) :
+    wp (EffectSpecs.toEffect run) post onError before ↔
+      InstructionWP.resultPre post onError (run before) := by
+  simp only [wp, WP.wpTrans, EffectSpecs.toEffect]
+  rcases ran : run before with ⟨after, outcome⟩
+  cases outcome <;> rfl
+
+private def assertLift {A : Type} (result : Except StepError A) : MachineHooks.M K U A :=
+  match result with
+  | .ok value => pure value
+  | .error error => throw error
+
+@[spec] theorem canonical_callOperand (config : Config) (limits : Limits) (choice : C)
+    (operand : Miri.MIR.Operand) :
+    (ExecutionMachine.callHooks config limits).evalOperand choice operand =
+      OperandMachine.evalOperand
+        (ExecutionMachine.operandHooks (ExecutionMachine.withValidation config limits)) choice operand none :=
+  rfl
+
+@[spec] theorem canonical_callPlace (config : Config) (limits : Limits) (choice : C)
+    (place : Place) (skipValidity : Bool) :
+    (ExecutionMachine.callHooks config limits).evalPlace choice place skipValidity =
+      (do return (← PlaceDynamic.evalPlace
+        (ExecutionMachine.projectionHooks (ExecutionMachine.withValidation config limits))
+        choice place skipValidity).stackView) :=
+  rfl
+
+@[spec] theorem canonical_callPlaceToOp (config : Config) (limits : Limits) (choice : C)
+    (place : RuntimeStackPlace Miri.Memory.Provenance) :
+    (ExecutionMachine.callHooks config limits).placeToOp choice place =
+      placeToOp (ExecutionMachine.projectionHooks (ExecutionMachine.withValidation config limits)).place
+        choice place.toRuntimePlace :=
+  rfl
+
+@[spec] theorem canonical_callForceAllocation (config : Config) (limits : Limits) (choice : C)
+    (place : RuntimeStackPlace Miri.Memory.Provenance) :
+    (ExecutionMachine.callHooks config limits).forceAllocation choice place =
+      forceAllocation (ExecutionMachine.projectionHooks (ExecutionMachine.withValidation config limits)).place
+        choice place.toRuntimePlace :=
+  rfl
+
+@[spec] theorem canonical_callCopyArgument (config : Config) (limits : Limits) (choice : C)
+    (source : OpTy Miri.Memory.Provenance) (dest : RuntimeStackPlace Miri.Memory.Provenance) :
+    (ExecutionMachine.callHooks config limits).copyAllowTransmute choice source dest =
+      (let checked := ExecutionMachine.withValidation config limits
+       copyRuntimePlace (ExecutionMachine.projectionHooks checked).place checked.copy
+         choice source dest.toRuntimePlace true) :=
+  rfl
+
+@[spec] theorem canonical_callProtectArgument (config : Config) (limits : Limits) (choice : C)
+    (place : MPlaceTy Miri.Memory.Provenance) :
+    (ExecutionMachine.callHooks config limits).protectArgument choice place =
+      TypedRetag.protectInPlaceFunctionArgument (ExecutionMachine.withValidation config limits).retag
+        limits.retag place :=
+  rfl
+
+/-- Evaluate and read a MIR assertion operand, preserving each failed effect. -/
+def assertConditionEffect (config : Config) (limits : Limits) (choice : C)
+    (condition : Miri.MIR.Operand) : MachineHooks.M K U Bool := do
+  let checked := ExecutionMachine.withValidation config limits
+  let read := do
+    let operand ← OperandMachine.evalOperand (ExecutionMachine.operandHooks checked) choice condition none
+    PlaceMachine.readImmediate checked.access operand
+  let value ← read
+  let scalar ← assertLift (value.imm.toScalar.mapError ScalarOps.immediateError)
+  assertLift (scalar.toBool.mapError ScalarOps.scalarError)
+
+@[spec] theorem canonical_assertCondition (config : Config) (limits : Limits)
+    (choice : C) (condition : Miri.MIR.Operand) :
+    EffectSpecs.toEffect ((ExecutionMachine.terminatorHooks config limits).readAssertCondition choice condition) =
+      assertConditionEffect config limits choice condition :=
+  EffectSpecs.machine_run_effect _
+
+/-- Call the appropriate panic lang item with the original unwind action. -/
+def assertPanicEffect (config : Config) (limits : Limits) (choice : C)
+    (message : AssertKind) (unwind : UnwindAction) : MachineHooks.M K U Unit :=
+  let checked := ExecutionMachine.withValidation config limits
+  let call := ExecutionMachine.callHooks checked limits
+  let panic := { checked.panic with
+    evalOperand := fun c op => OperandMachine.evalOperand (ExecutionMachine.operandHooks checked) c op none
+    driver := FunctionCalls.bindUnwind checked.panic.driver (ExecutionCalls.helpers checked.helpers call) }
+  Panic.assertPanic panic choice message unwind
+
+@[spec] theorem canonical_assertPanic (config : Config) (limits : Limits) (choice : C)
+    (message : AssertKind) (unwind : UnwindAction) :
+    EffectSpecs.toEffect ((ExecutionMachine.terminatorHooks config limits).assertPanic choice message unwind) =
+      assertPanicEffect config limits choice message unwind :=
+  EffectSpecs.machine_run_effect _
+
+/-- Evaluate the dropped place and resolve its glue before invoking the typed
+drop call. An empty drop glue advances directly to the target. -/
+def dropEffect (config : Config) (limits : Limits) (choice : C) (place : Place)
+    (target : BasicBlockId) (unwind : UnwindAction) : MachineHooks.M K U Unit := do
+  let checked := ExecutionMachine.withValidation config limits
+  let calls := ExecutionMachine.callHooks checked limits
+  let dest ← PlaceDynamic.evalPlace (ExecutionMachine.projectionHooks checked) choice place false
+  let callee ← calls.resolveDropGlue choice dest.layout.ty
+  match ← calls.instanceKind callee with
+  | .Shim (.DropGlue _ none) =>
+    let state ← get
+    let (state, outcome) := ControlFlow.goToBlock target state
+    set state
+    match outcome with
+    | .ok value => pure value
+    | .error error => throw error
+  | _ => Call.initDropInPlaceCall calls choice limits.callDispatch dest.stackView callee target unwind
+
+theorem canonical_dropEffect (config : Config) (limits : Limits) (choice : C)
+    (place : Place) (target : BasicBlockId) (unwind : UnwindAction) :
+    EffectSpecs.toEffect ((ExecutionMachine.terminatorHooks config limits).drop choice place target unwind) =
+      dropEffect config limits choice place target unwind :=
+  EffectSpecs.canonical_drop_effect _ _ _ _ _ _
+
+attribute [spec] assertConditionEffect assertPanicEffect dropEffect
+
+/-- Control-specific guards wrap the actual typed call, drop and assert
+actions. Call dispatch remains an effect boundary for the selected callee. -/
+def selectedTerminatorPre (config : Config) (limits : Limits) (choice : C) (term : Terminator)
+    (post : State → Prop) (onError : Errors) (before : State) : Prop :=
+  let hooks := ExecutionMachine.terminatorHooks config limits
+  let checked := ExecutionMachine.withValidation config limits
+  let calls := ExecutionMachine.callHooks checked limits
+  match term.kind with
+  | .Call _ _ _ target .. =>
+    wp (Call.evalCallTerminator calls choice limits.callDispatch term) (fun _ after =>
+      if target.isSome && after.stack.frames.size == before.stack.frames.size &&
+          after.stack.currentFrame?.map (·.location) == before.stack.currentFrame?.map (·.location) then
+        onError (.invalidProgram "evaluating this call made no progress") after
+      else post after) onError before
+  | .TailCall .. =>
+    wp (Call.evalTailCallTerminator calls choice limits.callDispatch term) (fun _ after =>
+      if after.stack.frames.size != before.stack.frames.size then
+        onError (.invalidProgram "tail call changed frame index") after
+      else post after) onError before
+  | .Drop place target unwind _ asyncDrop =>
+    if asyncDrop.isSome then
+      onError (.invalidProgram "Async Drop must be expanded or reset to sync") before
+    else wp (dropEffect config limits choice place target unwind) (fun _ => post) onError before
+  | .Assert condition expected message target unwind =>
+    let ignored := hooks.ignoreOptionalOverflowChecks before && ControlFlow.isOptionalOverflowCheck message
+    wp (assertConditionEffect config limits choice condition) (fun actual after =>
+      if ignored || expected == actual then InstructionWP.jumpPre target post onError after
+      else wp (assertPanicEffect config limits choice message unwind) (fun _ => post) onError after)
+      onError before
+  | _ => InstructionWP.terminatorPreWithReturn hooks choice term (returnPre config limits choice)
+      post onError before
+
+theorem selectedTerminatorPre_iff (config : Config) (limits : Limits) (choice : C)
+    (term : Terminator) (post : State → Prop) (onError : Errors) (before : State) :
+    selectedTerminatorPre config limits choice term post onError before ↔
+      InstructionWP.terminatorPreWithReturn (ExecutionMachine.terminatorHooks config limits)
+        choice term (returnPre config limits choice) post onError before := by
+  obtain ⟨info, kind⟩ := term
+  cases kind <;> try rfl
+  case Call => exact effectWP_iff _ _ _ _
+  case TailCall => exact effectWP_iff _ _ _ _
+  case Drop =>
+    simp only [selectedTerminatorPre, InstructionWP.terminatorPreWithReturn]
+    split
+    · rfl
+    · rw [← canonical_dropEffect]
+      exact callbackWP_iff _ _ _ _
+  case Assert =>
+    simp only [selectedTerminatorPre, InstructionWP.terminatorPreWithReturn,
+      ← canonical_assertCondition, ← canonical_assertPanic, callbackWP_iff]
+
+attribute [spec] Call.evalTailCallTerminator Call.initFnTailCall Call.passArgument Panic.assertPanic assertLift
+
 /-- Process the selected terminator after the production pre-hook. Its
 successful output is the state given to the terminator continuation. -/
 def terminatorPre (config : Config) (limits : Limits) (choice : C)
     (term : Terminator) (post : Success) (onError : Errors) (before : State) : Prop :=
   let checked := ExecutionMachine.withValidation config limits
   wp (TerminatorMachine.beforeTerminatorWithChoice checked.terminators (checked.preemptionChoice choice))
-    (fun _ ready => InstructionWP.terminatorPreWithReturn (ExecutionMachine.terminatorHooks config limits)
-      choice term (returnPre config limits choice) (post true) onError ready) onError before
+    (fun _ ready => selectedTerminatorPre config limits choice term (post true) onError ready) onError before
 
 theorem terminatorPre_iff (config : Config) (limits : Limits) (choice : C)
     (term : Terminator) (post : Success) (onError : Errors) (before : State) :
@@ -324,6 +493,7 @@ theorem terminatorPre_iff (config : Config) (limits : Limits) (choice : C)
   cases result with
   | error => rfl
   | ok =>
+    apply (selectedTerminatorPre_iff config limits choice term (post true) onError ready).trans
     exact (InstructionWP.terminatorPreWithReturn_congr _ _ _
       (returnPre_iff config limits choice) _ _ _).trans
       (InstructionWP.terminatorPre_iff _ _ _ _ _ _)

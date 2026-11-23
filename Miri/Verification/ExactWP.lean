@@ -1,6 +1,8 @@
 import Miri.Verification.CanonicalStepWP
 import Miri.Verification.MemoryWP
 import Miri.Verification.RvalueWP
+import Miri.Verification.TreeBorrowSetupWP
+import Miri.Verification.TreeDiagnosticWP
 import Miri.Verification.TreeEffectsWP
 import Miri.Verification.TypedRetagWP
 
