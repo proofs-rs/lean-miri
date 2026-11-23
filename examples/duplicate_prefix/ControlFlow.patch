@@ -32,7 +32,11 @@
 +      all_goals cases congrArg Prod.snd terminal
 --- a/examples/duplicate_prefix/ImmediateReadProof.lean
 +++ b/examples/duplicate_prefix/ImmediateReadProof.lean
-@@ -28 +28 @@
+@@ -26 +26,2 @@
+-  evalTactic (← `(tactic| simp_all [PlaceMachine.readImmediate,
++  evalTactic (← `(tactic| delta PlaceMachine.readImmediate))
++  evalTactic (← `(tactic| simp_all [
+@@ -28 +29 @@
 -    Miri.Interpreter.readImmediateRaw, localMemoryLayout,
 +    Miri.Interpreter.readImmediateRaw, Miri.Interpreter.finishImmediateRead, localMemoryLayout,
 --- a/examples/duplicate_prefix/AllocationCopy.lean
