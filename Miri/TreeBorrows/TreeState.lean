@@ -406,124 +406,162 @@ private def exactRelatedness? : WildcardAccessRelatedness → Option AccessRelat
   | .ForeignAccess => some .ForeignAccess
   | .EitherAccess => none
 
+private structure WildcardVisit where
+  location : LocationTree
+  hasValidExposed : Bool
+  status : WildcardAccessStatus
+  stack : Array (UniIndex × Bool)
+
+private def WildcardVisit.active (visit : WildcardVisit) : Bool :=
+  !visit.stack.isEmpty && visit.status == .Completed
+
+private inductive WildcardPrepared where
+  | complete (visit : WildcardVisit)
+  | permission (recorded : Tree.LocationState) (relatedness : AccessRelatedness)
+      (held : Bool) (commit : Tree.LocationState.AccessResult → WildcardVisit)
+
+private def commitWildcardPermission (tree : BorrowTree) (index : UniIndex)
+    (node : TreeNode) (oldState : Tree.LocationState) (isProtected : Bool)
+    (visit : WildcardVisit) (access : Tree.LocationState.AccessResult) : WildcardVisit := Id.run do
+  let mut location := visit.location
+  let mut status := visit.status
+  let updatedState := access.resultingState
+  location := { location with perms := location.perms.insert index updatedState }
+  match access with
+  | .Success _ transition =>
+      if node.isExposed && !transition.isNoop then
+        let oldLevel := oldState.permission.strongestAllowedLocalAccess isProtected
+        let newLevel := updatedState.permission.strongestAllowedLocalAccess isProtected
+        let update := location.exposedCache.updateExposure tree.nodes index
+          oldLevel newLevel
+        location := { location with exposedCache := update.cache }
+        match update.outcome with
+        | .error error => status := .CacheFailure error
+        | .ok _ => pure ()
+  | .Error _ error => status := .TransitionError index error
+  | .PermissionInvariantFailure _ => status := .PermissionInvariantFailure index
+  | .TransitionApplicationInvariantFailure _ =>
+      status := .TransitionApplicationInvariantFailure index
+  | .PossibleInvariantFailure _ => status := .PossibleInvariantFailure index
+  return { visit with location, status }
+
+private def prepareWildcardNode (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option Miri.Memory.BorTag) (kind : AccessKind) (protectedTags : ProtectedTags)
+    (isWildcardTree : Bool) (visit : WildcardVisit) : WildcardPrepared := Id.run do
+  let mut location := visit.location
+  let mut hasValidExposed := visit.hasValidExposed
+  let mut status := visit.status
+  let mut stack := visit.stack
+  let some (index, afterChildren) := stack.back?
+    | status := .EmptyTraversalStack root
+      return .complete ⟨location, hasValidExposed, status, stack⟩
+  if !afterChildren then
+    let some node := tree.nodes.get index
+      | status := .MissingNode index
+        return .complete ⟨location, hasValidExposed, status, stack⟩
+    let onlyForeign := match maxLocalTag with
+      | some maximum => maximum.value < node.tag.value
+      | none => false
+    let relatedness := wildcardRelatedness location.exposedCache root index kind
+      isWildcardTree onlyForeign
+    let state := location.perms.get index |>.getD node.defaultLocationState
+    let skip := match relatedness.bind exactRelatedness? with
+      | some rel =>
+          match state.skipIfKnownNoop kind rel with
+          | .SkipSelfAndChildren => true
+          | .Recurse => false
+      | none => false
+    if skip then
+      stack := stack.pop
+    else
+      stack := stack.pop.push (index, true)
+      for child in node.children do
+        stack := stack.push (child, false)
+  else
+    stack := stack.pop
+    let some node := tree.nodes.get index
+      | status := .MissingNode index
+        return .complete ⟨location, hasValidExposed, status, stack⟩
+    let onlyForeign := match maxLocalTag with
+      | some maximum => maximum.value < node.tag.value
+      | none => false
+    let relatedness := wildcardRelatedness location.exposedCache root index kind
+      isWildcardTree onlyForeign
+    match relatedness with
+    | none =>
+        status := .NoValidExposedReferences root (some index)
+    | some related =>
+        let isProtected := protectedTags.contains node.tag
+        let oldState := location.perms.get index |>.getD node.defaultLocationState
+        if node.isExposed &&
+            (oldState.permission.strongestAllowedLocalAccess isProtected).allows kind &&
+            (maxLocalTag.isNone || maxLocalTag.any
+              (fun maximum => maximum.value >= node.tag.value)) then
+          hasValidExposed := true
+        let (withState, state) := location.perms.orInsert index node.defaultLocationState
+        location := { location with perms := withState }
+        match exactRelatedness? related with
+        | none => pure ()
+        | some rel =>
+            -- Local workaround for https://github.com/rust-lang/miri/issues/5543.
+            -- Child transitions can remove the last exposed descendant and
+            -- change an entry-time Either access into a Foreign access.
+            -- The complete foreign-Write no-op class is read-safe too.
+            -- A current SIFA skip therefore leaves every state field
+            -- unchanged, including the held-sensitive protected cases.
+            -- Retain materialization and all child/cache/witness effects.
+            if rel == .ForeignAccess && state.foreignWriteNoop isProtected &&
+                state.skipIfKnownNoop kind rel == .SkipSelfAndChildren then
+              pure ()
+            else
+              match state.recordNewAccess kind rel with
+              | .DebugAssertion => status := .RecordDebugAssertion index
+              | .Recorded recorded =>
+                  location := { location with perms := location.perms.insert index recorded }
+                  let current : WildcardVisit := ⟨location, hasValidExposed, status, stack⟩
+                  return .permission recorded rel isProtected
+                    (commitWildcardPermission tree index node oldState isProtected current)
+  return .complete ⟨location, hasValidExposed, status, stack⟩
+
+private def visitWildcardNode (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option Miri.Memory.BorTag) (kind : AccessKind) (protectedTags : ProtectedTags)
+    (isWildcardTree : Bool) (visit : WildcardVisit) : WildcardVisit :=
+  match prepareWildcardNode tree root maxLocalTag kind protectedTags isWildcardTree visit with
+  | .complete next => next
+  | .permission recorded related held commit => commit (recorded.performAccess kind related held)
+
+private def wildcardScan (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option Miri.Memory.BorTag) (kind : AccessKind) (protectedTags : ProtectedTags)
+    (isWildcardTree : Bool) (_ : Unit) (current : WildcardVisit × Nat) :
+    Id (ForInStep (WildcardVisit × Nat)) :=
+  if current.1.active then
+    let steps := current.2 + 1
+    if steps > tree.nodes.size * 2 + 1 then
+      .yield ({ current.1 with status := .ParentCycle root }, steps)
+    else
+      .yield (visitWildcardNode tree root maxLocalTag kind protectedTags isWildcardTree current.1, steps)
+  else .done current
+
+private def finishWildcardVisit (root : UniIndex) (isWildcardTree : Bool)
+    (visit : WildcardVisit) : WildcardLocationAccessResult :=
+  ⟨visit.location, if visit.status == .Completed && !visit.hasValidExposed && !isWildcardTree then
+    .NoValidExposedReferences root none else visit.status⟩
+
 /-- Source `LocationTree::perform_wildcard_access`. The stack implements the
-source visitor's child-first, postorder traversal. Relatedness and SIFA skip
-decisions are recomputed against the cache as child transitions change it.
--/
+child-first, postorder traversal. Relatedness and SIFA skip decisions are
+recomputed against the cache as child transitions change it. -/
 def performWildcardAccessAt (tree : BorrowTree) (initialLocation : LocationTree)
     (root : UniIndex) (maxLocalTag : Option Miri.Memory.BorTag)
     (kind : AccessKind) (protectedTags : ProtectedTags) (isWildcardTree : Bool) :
-    WildcardLocationAccessResult := Id.run do
-  let mut location := initialLocation
-  let mut hasValidExposed := false
-  let mut status := WildcardAccessStatus.Completed
-  let mut stack : Array (UniIndex × Bool) := #[(root, false)]
-  let mut steps := 0
-  while !stack.isEmpty && status == .Completed do
-    steps := steps + 1
-    if steps > tree.nodes.size * 2 + 1 then
-      status := .ParentCycle root
-    else
-      let some (index, afterChildren) := stack.back?
-        | status := .EmptyTraversalStack root
-          continue
-      if !afterChildren then
-        let some node := tree.nodes.get index
-          | status := .MissingNode index
-            continue
-        let onlyForeign := match maxLocalTag with
-          | some maximum => maximum.value < node.tag.value
-          | none => false
-        let relatedness := wildcardRelatedness location.exposedCache root index kind
-          isWildcardTree onlyForeign
-        let state := location.perms.get index |>.getD node.defaultLocationState
-        let skip := match relatedness.bind exactRelatedness? with
-          | some rel =>
-              match state.skipIfKnownNoop kind rel with
-              | .SkipSelfAndChildren => true
-              | .Recurse => false
-          | none => false
-        if skip then
-          stack := stack.pop
-        else
-          stack := stack.pop.push (index, true)
-          for child in node.children do
-            stack := stack.push (child, false)
-      else
-        stack := stack.pop
-        let some node := tree.nodes.get index
-          | status := .MissingNode index
-            continue
-        let onlyForeign := match maxLocalTag with
-          | some maximum => maximum.value < node.tag.value
-          | none => false
-        let relatedness := wildcardRelatedness location.exposedCache root index kind
-          isWildcardTree onlyForeign
-        match relatedness with
-        | none =>
-            status := .NoValidExposedReferences root (some index)
-        | some related =>
-            let isProtected := protectedTags.contains node.tag
-            let oldState := location.perms.get index |>.getD node.defaultLocationState
-            if node.isExposed &&
-                (oldState.permission.strongestAllowedLocalAccess isProtected).allows kind &&
-                (maxLocalTag.isNone || maxLocalTag.any
-                  (fun maximum => maximum.value >= node.tag.value)) then
-              hasValidExposed := true
-            let (withState, state) := location.perms.orInsert index node.defaultLocationState
-            location := { location with perms := withState }
-            match exactRelatedness? related with
-            | none => pure ()
-            | some rel =>
-                -- Local workaround for https://github.com/rust-lang/miri/issues/5543.
-                -- Child transitions can remove the last exposed descendant and
-                -- change an entry-time Either access into a Foreign access.
-                -- The complete foreign-Write no-op class is read-safe too.
-                -- A current SIFA skip therefore leaves every state field
-                -- unchanged, including the held-sensitive protected cases.
-                -- Retain materialization and all child/cache/witness effects.
-                if rel == .ForeignAccess && state.foreignWriteNoop isProtected &&
-                    state.skipIfKnownNoop kind rel == .SkipSelfAndChildren then
-                  pure ()
-                else
-                  match state.recordNewAccess kind rel with
-                  | .DebugAssertion => status := .RecordDebugAssertion index
-                  | .Recorded recorded =>
-                      location := { location with perms := location.perms.insert index recorded }
-                      let access := recorded.performAccess kind rel isProtected
-                      let updatedState := access.resultingState
-                      location := { location with perms := location.perms.insert index updatedState }
-                      match access with
-                      | .Success _ transition =>
-                          if node.isExposed && !transition.isNoop then
-                            let oldLevel := oldState.permission.strongestAllowedLocalAccess isProtected
-                            let newLevel := updatedState.permission.strongestAllowedLocalAccess isProtected
-                            let update := location.exposedCache.updateExposure tree.nodes index
-                              oldLevel newLevel
-                            location := { location with exposedCache := update.cache }
-                            match update.outcome with
-                            | .error error => status := .CacheFailure error
-                            | .ok _ => pure ()
-                      | .Error _ error => status := .TransitionError index error
-                      | .PermissionInvariantFailure _ => status := .PermissionInvariantFailure index
-                      | .TransitionApplicationInvariantFailure _ =>
-                          status := .TransitionApplicationInvariantFailure index
-                      | .PossibleInvariantFailure _ => status := .PossibleInvariantFailure index
-  if status == .Completed && !hasValidExposed && !isWildcardTree then
-    status := .NoValidExposedReferences root none
-  return { location, status }
+    WildcardLocationAccessResult :=
+  let initial : WildcardVisit := ⟨initialLocation, false, .Completed, #[(root, false)]⟩
+  let final := Lean.Loop.forIn {} (initial, 0)
+    (wildcardScan tree root maxLocalTag kind protectedTags isWildcardTree)
+  finishWildcardVisit root isWildcardTree final.1
 
-/-- Perform the source normal-tree component at one actual tree location.
-Permission transitions are delegated to `NormalTreeState`; this operation
-projects the source `UniValMap` topology and lazy defaults, writes state back
-to the real maps, and applies exposed-cache deltas in visit order. Additional
-wildcard roots are handled by the separate wildcard-access component.
--/
-def performNormalAccessAt (tree : BorrowTree) (location : LocationTree)
-    (start : UniIndex) (kind : AccessKind) (protectedTags : ProtectedTags)
-    (mode : Tree.ChildrenVisitMode) : NormalLocationAccessResult := Id.run do
-  let access := Tree.NormalTreeState.performAccess
-    (normalProjection tree location protectedTags) start.toNat kind mode
+private def commitNormalAccessAt (tree : BorrowTree) (location : LocationTree)
+    (kind : AccessKind) (protectedTags : ProtectedTags)
+    (access : Tree.NormalAccessResult) : NormalLocationAccessResult := Id.run do
   let mut nextLocation := location
   for position in [:access.tree.locationStates.size] do
     match access.tree.locationStates[position]? with
@@ -560,6 +598,19 @@ def performNormalAccessAt (tree : BorrowTree) (location : LocationTree)
                 | .UndefinedBehavior | .ImpossibleProtectedReservedIM => pure ()
             | _, _ => cacheOutcome := .error (.MissingNode index)
   return { location := nextLocation, access, outcome := cacheOutcome }
+
+/-- Perform the source normal-tree component at one actual tree location.
+Permission transitions are delegated to `NormalTreeState`; this operation
+projects the source `UniValMap` topology and lazy defaults, writes state back
+to the real maps, and applies exposed-cache deltas in visit order. Additional
+wildcard roots are handled by the separate wildcard-access component.
+-/
+def performNormalAccessAt (tree : BorrowTree) (location : LocationTree)
+    (start : UniIndex) (kind : AccessKind) (protectedTags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) : NormalLocationAccessResult :=
+  commitNormalAccessAt tree location kind protectedTags
+    (Tree.NormalTreeState.performAccess (normalProjection tree location protectedTags)
+      start.toNat kind mode)
 
 private def updateEveryLocation (tree : BorrowTree)
     (update : LocationTree → LocationTree × Except TreeMutationError Unit) :
@@ -918,22 +969,82 @@ structure BorrowTreeDeallocResult where
   status : BorrowTreeDeallocStatus
   deriving DecidableEq, Repr
 
-private structure TreeLocationAccessAtResult where
+structure TreeLocationAccessAtResult where
   location : LocationTree
   normalAccess : Option Tree.NormalAccessResult
   status : Option BorrowTreeAccessStatus
+
+private structure OtherRootProgress where
+  location : LocationTree
+  status : Option BorrowTreeAccessStatus := none
+  stopped : Bool := false
+
+private inductive OtherRootAction where
+  | skip
+  | stop
+  | visit (root : UniIndex)
+
+private def otherRootAction (tree : BorrowTree) (accessedRoot : Option UniIndex)
+    (mode : Tree.ChildrenVisitMode) (minExposed : Option Miri.Memory.BorTag)
+    (position : Nat) (current : OtherRootProgress) : OtherRootAction :=
+  if current.status.isNone && !current.stopped then
+    match tree.roots[position]? with
+    | none => .skip
+    | some root =>
+      let rootTag := (tree.nodes.get root).map TreeNode.tag
+      let pastMinExposed := match rootTag, minExposed with
+        | some tag, some minimum => tag.value > minimum.value
+        | _, _ => false
+      if mode == .SkipChildrenOfAccessed && pastMinExposed then .stop
+      else if accessedRoot != some root then .visit root
+      else .skip
+  else .skip
+
+private def commitOtherRoot (current : OtherRootProgress) (range : ByteRange)
+    (wildcard : WildcardLocationAccessResult) : OtherRootProgress :=
+  { current with
+    location := wildcard.location
+    status := if wildcard.status != .Completed then some (.WildcardFailure range wildcard.status)
+      else current.status }
+
+private def advanceOtherRoot (tree : BorrowTree) (accessedRoot : Option UniIndex)
+    (kind : AccessKind) (tags : ProtectedTags) (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (minExposed maxLocalTag : Option Miri.Memory.BorTag) (position : Nat)
+    (current : OtherRootProgress) : OtherRootProgress :=
+  match otherRootAction tree accessedRoot mode minExposed position current with
+  | .skip => current
+  | .stop => { current with stopped := true }
+  | .visit root =>
+    commitOtherRoot current range
+      (tree.performWildcardAccessAt current.location root maxLocalTag kind tags (position != 0))
+
+private def otherRootBounds (tree : BorrowTree) (source accessedRoot : Option UniIndex)
+    (mode : Tree.ChildrenVisitMode) : Option Miri.Memory.BorTag × Option Miri.Memory.BorTag :=
+  let minExposed := if mode == .SkipChildrenOfAccessed then source.bind (minExposedChild tree)
+    else none
+  let maxLocalTag := accessedRoot.bind fun root => (tree.nodes.get root).map TreeNode.tag
+  (minExposed, maxLocalTag)
+
+private def performOtherRootsAt (tree : BorrowTree) (location : LocationTree)
+    (source accessedRoot : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (normalAccess : Option Tree.NormalAccessResult) : TreeLocationAccessAtResult := Id.run do
+  let (minExposed, maxLocalTag) := otherRootBounds tree source accessedRoot mode
+  let final ← forIn [:tree.roots.size] ({ location } : OtherRootProgress) fun position current =>
+    pure (.yield (advanceOtherRoot tree accessedRoot kind tags mode range minExposed maxLocalTag
+      position current))
+  return ⟨final.location, normalAccess, final.status⟩
 
 /-- Apply the source LocationTree::perform_access order: first the concrete
 source tree, then each other root as a wildcard subtree. None provenance
 starts with wildcard accesses on all roots.
 -/
-private def performTreeAccessAt (tree : BorrowTree) (location : LocationTree)
+def performTreeAccessAt (tree : BorrowTree) (location : LocationTree)
     (source? : Option UniIndex) (kind : AccessKind) (protectedTags : ProtectedTags)
     (mode : Tree.ChildrenVisitMode) (range : ByteRange) : TreeLocationAccessAtResult := Id.run do
   let mut currentLocation := location
   let mut normalAccess : Option Tree.NormalAccessResult := none
   let mut accessedRoot? : Option UniIndex := none
-  let mut status : Option BorrowTreeAccessStatus := none
   if let some source := source? then
     let normal := tree.performNormalAccessAt currentLocation source kind protectedTags mode
     currentLocation := normal.location
@@ -950,29 +1061,8 @@ private def performTreeAccessAt (tree : BorrowTree) (location : LocationTree)
             return ⟨currentLocation, normalAccess,
               some (.AccessFailure range (.MissingLocationState normal.access.root))⟩
         | some root => accessedRoot? := some root
-  let maxLocalTag := accessedRoot?.bind fun root => (tree.nodes.get root).map TreeNode.tag
-  let minExposed := if mode == .SkipChildrenOfAccessed then
-      source?.bind (minExposedChild tree)
-    else none
-  let mut stopOtherRoots := false
-  for rootPosition in [:tree.roots.size] do
-    if status.isNone && !stopOtherRoots then
-      match tree.roots[rootPosition]? with
-      | none => pure ()
-      | some root =>
-          let rootTag := (tree.nodes.get root).map TreeNode.tag
-          let pastMinExposed := match rootTag, minExposed with
-            | some tag, some minimum => tag.value > minimum.value
-            | _, _ => false
-          if mode == .SkipChildrenOfAccessed && pastMinExposed then
-            stopOtherRoots := true
-          else if accessedRoot? != some root then
-            let wildcard := tree.performWildcardAccessAt currentLocation root
-              maxLocalTag kind protectedTags (rootPosition != 0)
-            currentLocation := wildcard.location
-            if wildcard.status != .Completed then
-              status := some (.WildcardFailure range wildcard.status)
-  return ⟨currentLocation, normalAccess, status⟩
+  return performOtherRootsAt tree currentLocation source? accessedRoot? kind protectedTags
+    mode range normalAccess
 
 /-- Ranged access for concrete or wildcard provenance. Tree state and
 Willard-cache updates are threaded across homogeneous range segments and all
@@ -1079,92 +1169,85 @@ def releaseProtector (tree : BorrowTree) (tag : Miri.Memory.BorTag)
       return { tree := exposure.tree, status := .ExposureUpdateFailure error }
   | .ok () => return { tree := exposure.tree, status := .Released }
 
-/-- Source `Tree::dealloc` for a single concrete root: first perform the write
-through the supplied tag, then inspect visited nodes in source tree-visitor
-order for accessed strong protectors. Cell permissions are exempt. Weak
-protectors are handled by the initial write transition itself.
--/
-def deallocateBorrowRange (tree : BorrowTree)
+private def strongProtectorAt (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (event : Tree.TraversalEvent) : Option UniIndex := do
+  let index ← UniIndex.ofNat? event.node
+  let node ← tree.nodeAt index
+  let state := location.perms.get index |>.getD node.defaultLocationState
+  if tags.get node.tag == some .StrongProtector && !state.permission.isCell && state.accessed then
+    some index
+  else none
+
+private def findStrongProtectorInOtherRoots (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (topology : Tree.TraversalTree)
+    (accessedRoot : Option UniIndex) : Option UniIndex :=
+  tree.roots.reverse.toList.findSome? fun root =>
+    if accessedRoot == some root then none
+    else
+      let events := (topology.traverse root.toNat .VisitChildrenOfAccessed []).2
+      events.findSome? (strongProtectorAt tree location tags)
+
+/-- Source visitor order for the terminal protector check. A concrete tag is
+visited before its ancestors, then the remaining roots are checked in reverse
+root order. The selected root is omitted from that second pass. -/
+private def firstStrongProtector (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (start : Option UniIndex) : Option UniIndex :=
+  let topology := traversalProjection tree
+  match start with
+  | none => findStrongProtectorInOtherRoots tree location tags topology none
+  | some index =>
+    let (root, events) := topology.traverse index.toNat .VisitChildrenOfAccessed []
+    match events.findSome? (strongProtectorAt tree location tags) with
+    | some protectedIndex => some protectedIndex
+    | none => findStrongProtectorInOtherRoots tree location tags topology (UniIndex.ofNat? root)
+
+private def deallocationCursor (tree : BorrowTree) (prepared : IterMutResult LocationTree)
+    (tags : ProtectedTags) (start : Option UniIndex) (cursor : Nat) : Option BorrowTreeDeallocStatus :=
+  match prepared.positions[cursor]?, prepared.segments[cursor]? with
+  | some position, some segment =>
+    match firstStrongProtector tree segment.data tags start with
+    | some index => some (.ProtectedDealloc segment.range index)
+    | none =>
+      match prepared.state.index position with
+      | .error error => some (.RangeMapFailure error)
+      | .ok _ => none
+  | _, _ => some (.RangeMapFailure (.indexOutOfBounds cursor prepared.positions.size))
+
+/-- The source strong-protector scan following the deallocation write. It
+uses the tree committed by the write, including on failure. -/
+def deallocateAfterWrite (accessed : BorrowTreeAccessResult)
     (provenance : Miri.Memory.ProvenanceExtra)
     (offset length : Size) (protectedTags : ProtectedTags) : BorrowTreeDeallocResult := Id.run do
-  let accessed := tree.performBorrowAccessRange provenance offset length .Write protectedTags
-    .VisitChildrenOfAccessed
   if accessed.status != .Completed then
     return { tree := accessed.tree, status := .AccessFailure accessed.status }
-  -- `Tree::dealloc` checks the concrete provenance tag itself first. The
-  -- normal access result's root is deliberately not used here: starting at
-  -- the root changes the visitor's local-access prefix and protector error
-  -- precedence when the provenance tag is an interior node.
-  let startIndex? := match provenance with
+  let start := match provenance with
     | .concrete tag => accessed.tree.indexOfTag tag
     | .wildcard => none
   if let .concrete tag := provenance then
-    if startIndex?.isNone then
+    if start.isNone then
       return { tree := accessed.tree, status := .MissingTag tag }
   let prepared := accessed.tree.locations.iterMut offset length
-  let mut currentMap := prepared.state
+  let updatedTree := { accessed.tree with locations := prepared.state }
   match prepared.outcome with
-  | .error error =>
-      let updatedTree := { accessed.tree with locations := currentMap }
-      return { tree := updatedTree, status := .RangeMapFailure error }
+  | .error error => return ⟨updatedTree, .RangeMapFailure error⟩
   | .ok () =>
-      for cursor in [:prepared.positions.size] do
-        match prepared.positions[cursor]?, prepared.segments[cursor]? with
-        | some position, some segment =>
-            let topology := traversalProjection accessed.tree
-            let mut foundProtected : Option UniIndex := none
-            let mut accessedRoot? : Option UniIndex := none
-            -- The source visitor first traverses the concrete tag and its
-            -- ancestors, then deferred descendants/cousins. Its returned
-            -- root is the one excluded from the subsequent reverse-root pass.
-            if let some startIndex := startIndex? then
-              let traversal := Tree.TraversalTree.traverse topology startIndex.toNat
-                .VisitChildrenOfAccessed []
-              accessedRoot? := UniIndex.ofNat? traversal.1
-              for event in traversal.2 do
-                if foundProtected.isNone then
-                  match UniIndex.ofNat? event.node with
-                  | none => pure ()
-                  | some index =>
-                      match accessed.tree.nodeAt index with
-                      | none => pure ()
-                      | some node =>
-                          let permission := segment.data.perms.get index
-                            |>.getD node.defaultLocationState
-                          if protectedTags.get node.tag == some .StrongProtector &&
-                              !permission.permission.isCell && permission.accessed then
-                            foundProtected := some index
-            for root in accessed.tree.roots.reverse do
-              if accessedRoot? != some root && foundProtected.isNone then
-                let events := (Tree.TraversalTree.traverse topology root.toNat
-                  .VisitChildrenOfAccessed []).2
-                for event in events do
-                  if foundProtected.isNone then
-                    match UniIndex.ofNat? event.node with
-                    | none => pure ()
-                    | some index =>
-                        match accessed.tree.nodeAt index with
-                        | none => pure ()
-                        | some node =>
-                            let permission := segment.data.perms.get index
-                              |>.getD node.defaultLocationState
-                            if protectedTags.get node.tag == some .StrongProtector &&
-                                !permission.permission.isCell && permission.accessed then
-                              foundProtected := some index
-            if let some index := foundProtected then
-              let updatedTree := { accessed.tree with locations := currentMap }
-              return ⟨updatedTree, .ProtectedDealloc segment.range index⟩
-            match currentMap.index position with
-            | .error error =>
-                let updatedTree := { accessed.tree with locations := currentMap }
-                return { tree := updatedTree, status := .RangeMapFailure error }
-            | .ok _ => pure ()
-        | _, _ =>
-            let updatedTree := { accessed.tree with locations := currentMap }
-            return ⟨updatedTree,
-              .RangeMapFailure (.indexOutOfBounds cursor prepared.positions.size)⟩
-  let updatedTree := { accessed.tree with locations := currentMap }
-  return { tree := updatedTree, status := .Deallocated }
+    let failure := (List.range' 0 prepared.positions.size).findSome?
+      (deallocationCursor accessed.tree prepared protectedTags start)
+    return ⟨updatedTree, failure.getD .Deallocated⟩
+
+/-- Source `Tree::dealloc`: first perform the write through the supplied
+provenance, then inspect the resulting locations for accessed strong protectors.
+Cell permissions are exempt. The initial write handles weak protectors. -/
+def deallocateBorrowRange (tree : BorrowTree) (provenance : Miri.Memory.ProvenanceExtra)
+    (offset length : Size) (protectedTags : ProtectedTags) : BorrowTreeDeallocResult :=
+  deallocateAfterWrite (tree.performBorrowAccessRange provenance offset length .Write protectedTags
+    .VisitChildrenOfAccessed) provenance offset length protectedTags
+
+theorem deallocateBorrowRange_eq (tree : BorrowTree) (provenance : Miri.Memory.ProvenanceExtra)
+    (offset length : Size) (protectedTags : ProtectedTags) :
+    tree.deallocateBorrowRange provenance offset length protectedTags =
+      deallocateAfterWrite (tree.performBorrowAccessRange provenance offset length .Write protectedTags
+        .VisitChildrenOfAccessed) provenance offset length protectedTags := rfl
 
 /-- Concrete-tag convenience wrapper for source Tree::dealloc. -/
 def deallocateRange (tree : BorrowTree) (tag : Miri.Memory.BorTag)
@@ -2205,7 +2288,7 @@ private theorem fresh_projection (tag : BorTag) (size : Size) (protectedTags : P
 private theorem fresh_normal_at (tag : BorTag) (size : Size) (protectedTags : ProtectedTags) :
     (BorrowTree.new tag size).performNormalAccessAt freshLocation rootIndex .Write protectedTags .VisitChildrenOfAccessed =
       ⟨freshLocation,⟨freshNormal (protectedTags.contains tag),0,[⟨0,.LocalAccess⟩],.Completed⟩,.ok ()⟩ := by
-  unfold performNormalAccessAt
+  unfold performNormalAccessAt commitNormalAccessAt
   rw [fresh_projection]
   simp only [rootIndex,UniIndex.toNat,UInt32.toNat_zero,fresh_normal]
   simp [freshNormal,freshLocation,BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
@@ -2219,7 +2302,7 @@ private theorem fresh_tree_at (tag : BorTag) (size : Size) (protectedTags : Prot
   unfold performTreeAccessAt
   dsimp only [Id.run]
   rw [fresh_normal_at]
-  simp [BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
+  simp [performOtherRootsAt, otherRootBounds, advanceOtherRoot, otherRootAction, BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
     UniValMap.insert,UniValMap.get,UniValMap.extendTo,Id.run,bind,Bind.bind,pure,Pure.pure,
     ←Array.forIn_toList]
 
@@ -2259,3 +2342,1005 @@ theorem fresh_root_full_write (tag : BorTag) (size : Size) (protectedTags : Prot
     rfl
 
 end Miri.TreeBorrows.BorrowTree
+
+namespace Miri.TreeBorrows.BorrowTree
+namespace RangeVerification
+
+open Miri.ABI Miri.DataStructures Miri.Memory
+
+private def wildcardMeasure (limit : Nat) (cursor : WildcardVisit × Nat) : Nat :=
+  if cursor.1.active then limit - cursor.2 + 1 else 0
+
+private theorem wildcardScan_decreases (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags)
+    (isWildcardTree : Bool) (current next : WildcardVisit × Nat)
+    (more : wildcardScan tree root maxLocalTag kind tags isWildcardTree () current = .yield next) :
+    wildcardMeasure (tree.nodes.size * 2 + 1) next <
+      wildcardMeasure (tree.nodes.size * 2 + 1) current := by
+  unfold wildcardScan at more
+  by_cases active : current.1.active = true
+  · simp only [active, ↓reduceIte] at more
+    by_cases above : tree.nodes.size * 2 + 1 < current.2 + 1
+    · simp only [above, ↓reduceIte] at more
+      have same := ForInStep.yield.inj more
+      subst next
+      have inactive : ({ current.1 with status := .ParentCycle root } : WildcardVisit).active =
+          false := by simp [WildcardVisit.active]
+      simp [wildcardMeasure, active, inactive]
+    · simp only [above, ↓reduceIte] at more
+      have same := ForInStep.yield.inj more
+      subst next
+      unfold wildcardMeasure
+      simp only [active, ↓reduceIte]
+      split <;> omega
+  · simp [active] at more
+
+private def wildcardNodePre (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags) (isWildcardTree : Bool)
+    (visit : WildcardVisit) (finish : WildcardVisit → Prop) : Prop :=
+  match prepareWildcardNode tree root maxLocalTag kind tags isWildcardTree visit with
+  | .complete next => finish next
+  | .permission recorded related held commit =>
+    recorded.resultPre kind related held (fun result => finish (commit result))
+
+private theorem wildcardNodePre_iff (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags) (isWildcardTree : Bool)
+    (visit : WildcardVisit) (finish : WildcardVisit → Prop) :
+    finish (visitWildcardNode tree root maxLocalTag kind tags isWildcardTree visit) ↔
+      wildcardNodePre tree root maxLocalTag kind tags isWildcardTree visit finish := by
+  unfold visitWildcardNode wildcardNodePre
+  cases prepareWildcardNode tree root maxLocalTag kind tags isWildcardTree visit with
+  | complete => rfl
+  | permission recorded related held commit =>
+    exact Tree.LocationState.resultPre_iff recorded kind related held (fun result => finish (commit result))
+
+private def wildcardScanPre (tree : BorrowTree) (root : UniIndex) (maxLocalTag : Option BorTag)
+    (kind : AccessKind) (tags : ProtectedTags) (isWildcardTree : Bool)
+    (current : WildcardVisit × Nat) (finish : ForInStep (WildcardVisit × Nat) → Prop) : Prop :=
+  if current.1.active then
+    let steps := current.2 + 1
+    if steps > tree.nodes.size * 2 + 1 then
+      finish (.yield ({ current.1 with status := .ParentCycle root }, steps))
+    else wildcardNodePre tree root maxLocalTag kind tags isWildcardTree current.1
+      (fun visit => finish (.yield (visit, steps)))
+  else finish (.done current)
+
+private theorem wildcardScanPre_iff (tree : BorrowTree) (root : UniIndex) (maxLocalTag : Option BorTag)
+    (kind : AccessKind) (tags : ProtectedTags) (isWildcardTree : Bool)
+    (current : WildcardVisit × Nat) (finish : ForInStep (WildcardVisit × Nat) → Prop) :
+    finish (wildcardScan tree root maxLocalTag kind tags isWildcardTree () current) ↔
+      wildcardScanPre tree root maxLocalTag kind tags isWildcardTree current finish := by
+  unfold wildcardScan wildcardScanPre
+  by_cases active : current.1.active = true
+  · simp only [active, ↓reduceIte]
+    by_cases limit : tree.nodes.size * 2 + 1 < current.2 + 1
+    · simp only [limit, ↓reduceIte]
+    · simp only [limit, ↓reduceIte]
+      exact wildcardNodePre_iff tree root maxLocalTag kind tags isWildcardTree current.1
+        (fun visit => finish (.yield (visit, current.2 + 1)))
+  · simp only [active, Bool.false_eq_true, ↓reduceIte]
+
+private def wildcardWalkPre {S : Type} (scan : S → (ForInStep S → Prop) → Prop)
+    (finish : S → Prop) : Nat → S → Prop
+  | 0, cursor => finish cursor
+  | fuel + 1, cursor =>
+    scan cursor fun
+    | .done final => finish final
+    | .yield next => wildcardWalkPre scan finish fuel next
+
+private theorem wildcardWalkPre_iff (tree : BorrowTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags)
+    (isWildcardTree : Bool) (finish : WildcardVisit × Nat → Prop)
+    (fuel : Nat) (cursor : WildcardVisit × Nat)
+    (enough : wildcardMeasure (tree.nodes.size * 2 + 1) cursor ≤ fuel) :
+    finish (Lean.Loop.forIn (m := Id) {} cursor (wildcardScan tree root maxLocalTag kind tags isWildcardTree)) ↔
+      wildcardWalkPre (wildcardScanPre tree root maxLocalTag kind tags isWildcardTree) finish fuel cursor := by
+  induction fuel generalizing cursor with
+  | zero =>
+    have inactive : ¬cursor.1.active = true := by
+      intro active
+      simp [wildcardMeasure, active] at enough
+    rw [Lean.Loop.forIn_eq_of_monadTail]
+    simp [wildcardWalkPre, wildcardScan, inactive, bind, pure]
+  | succ fuel ih =>
+    rw [Lean.Loop.forIn_eq_of_monadTail, wildcardWalkPre, ← wildcardScanPre_iff]
+    cases actual : wildcardScan tree root maxLocalTag kind tags isWildcardTree () cursor with
+    | done final => simp [actual, bind, pure]
+    | yield next =>
+      simp only [actual, bind, Bind.bind]
+      have smaller := wildcardScan_decreases tree root maxLocalTag kind tags isWildcardTree
+        cursor next actual
+      exact ih next (by omega)
+
+/-- Ordered wildcard-node traversal with the interpreter's own cycle limit.
+Each yield consumes a visit, including the over-limit failure itself. -/
+def wildcardPre (tree : BorrowTree) (location : LocationTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags)
+    (isWildcardTree : Bool) (finish : WildcardLocationAccessResult → Prop) : Prop :=
+  let initial : WildcardVisit := ⟨location, false, .Completed, #[(root, false)]⟩
+  wildcardWalkPre (wildcardScanPre tree root maxLocalTag kind tags isWildcardTree)
+    (fun final => finish (finishWildcardVisit root isWildcardTree final.1))
+    (tree.nodes.size * 2 + 2) (initial, 0)
+
+theorem wildcardPre_iff (tree : BorrowTree) (location : LocationTree) (root : UniIndex)
+    (maxLocalTag : Option BorTag) (kind : AccessKind) (tags : ProtectedTags)
+    (isWildcardTree : Bool) (finish : WildcardLocationAccessResult → Prop) :
+    finish (tree.performWildcardAccessAt location root maxLocalTag kind tags isWildcardTree) ↔
+      wildcardPre tree location root maxLocalTag kind tags isWildcardTree finish := by
+  unfold wildcardPre performWildcardAccessAt
+  exact wildcardWalkPre_iff tree root maxLocalTag kind tags isWildcardTree
+    (fun final => finish (finishWildcardVisit root isWildcardTree final.1))
+    (tree.nodes.size * 2 + 2) (⟨location, false, .Completed, #[(root, false)]⟩, 0)
+    (by simp [wildcardMeasure, WildcardVisit.active, Nat.add_assoc])
+
+/-- Pull the continuation back through the finite list of source cursor
+indices, preserving the cursor-order dependency between segment transitions. -/
+def segmentsPre {S : Type} (step : Nat → (S → Prop) → S → Prop) (finish : S → Prop) :
+    List Nat → S → Prop
+  | [], current => finish current
+  | cursor :: rest, current => step cursor (segmentsPre step finish rest) current
+
+private theorem runSegments {S : Type} (cursors : List Nat) (step : Nat → S → S)
+    (stepPre : Nat → (S → Prop) → S → Prop) (finish : S → Prop) (before : S)
+    (exactStep : ∀ cursor before finish, finish (step cursor before) ↔ stepPre cursor finish before) :
+    finish (Id.run (forIn cursors before (fun cursor current => pure (.yield (step cursor current))))) ↔
+      segmentsPre stepPre finish cursors before := by
+  induction cursors generalizing before with
+  | nil => rfl
+  | cons cursor rest ih =>
+    simpa only [List.forIn_cons, segmentsPre, bind, Bind.bind, pure, Pure.pure] using
+      (ih (step cursor before)).trans (exactStep cursor before (segmentsPre stepPre finish rest))
+
+private def otherRootPre (tree : BorrowTree) (accessedRoot : Option UniIndex)
+    (kind : AccessKind) (tags : ProtectedTags) (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (minExposed maxLocalTag : Option BorTag) (position : Nat)
+    (finish : OtherRootProgress → Prop) (current : OtherRootProgress) : Prop :=
+  match otherRootAction tree accessedRoot mode minExposed position current with
+  | .skip => finish current
+  | .stop => finish { current with stopped := true }
+  | .visit root =>
+    wildcardPre tree current.location root maxLocalTag kind tags (position != 0)
+      (fun wildcard => finish (commitOtherRoot current range wildcard))
+
+private theorem otherRootPre_iff (tree : BorrowTree) (accessedRoot : Option UniIndex)
+    (kind : AccessKind) (tags : ProtectedTags) (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (minExposed maxLocalTag : Option BorTag) (position : Nat)
+    (finish : OtherRootProgress → Prop) (current : OtherRootProgress) :
+    finish (advanceOtherRoot tree accessedRoot kind tags mode range minExposed maxLocalTag
+      position current) ↔
+      otherRootPre tree accessedRoot kind tags mode range minExposed maxLocalTag position finish current := by
+  unfold advanceOtherRoot otherRootPre
+  cases otherRootAction tree accessedRoot mode minExposed position current with
+  | skip => rfl
+  | stop => rfl
+  | visit root =>
+    dsimp only
+    exact wildcardPre_iff tree current.location root maxLocalTag kind tags (position != 0)
+      (fun wildcard => finish (commitOtherRoot current range wildcard))
+
+private def otherRootsPre (tree : BorrowTree) (location : LocationTree)
+    (source accessedRoot : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (normalAccess : Option Tree.NormalAccessResult) (finish : TreeLocationAccessAtResult → Prop) : Prop :=
+  let (minExposed, maxLocalTag) := otherRootBounds tree source accessedRoot mode
+  segmentsPre (otherRootPre tree accessedRoot kind tags mode range minExposed maxLocalTag)
+    (fun final => finish ⟨final.location, normalAccess, final.status⟩)
+    (List.range' 0 tree.roots.size) { location }
+
+private theorem otherRootsPre_iff (tree : BorrowTree) (location : LocationTree)
+    (source accessedRoot : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (normalAccess : Option Tree.NormalAccessResult) (finish : TreeLocationAccessAtResult → Prop) :
+    finish (performOtherRootsAt tree location source accessedRoot kind tags mode range normalAccess) ↔
+      otherRootsPre tree location source accessedRoot kind tags mode range normalAccess finish := by
+  unfold performOtherRootsAt otherRootsPre
+  dsimp only [Id.run]
+  rcases otherRootBounds tree source accessedRoot mode with ⟨minExposed, maxLocalTag⟩
+  simp only [Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size,
+    Nat.sub_zero, Nat.add_sub_cancel, Nat.div_one]
+  exact runSegments (S := OtherRootProgress) _ _ _
+    (fun final => finish ⟨final.location, normalAccess, final.status⟩) _
+    (fun position current finish =>
+      otherRootPre_iff tree accessedRoot kind tags mode range minExposed maxLocalTag
+        position finish current)
+
+/-- Pull one allocation location through the concrete tree's ordered node
+visits and cache commits, then through the other roots in source order. -/
+def locationContract (tree : BorrowTree) (location : LocationTree) (source : Option UniIndex)
+    (kind : AccessKind) (tags : ProtectedTags) (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (finish : TreeLocationAccessAtResult → Prop) : Prop :=
+  match source with
+  | none => otherRootsPre tree location none none kind tags mode range none finish
+  | some index =>
+    Tree.NormalTreeState.accessPre (normalProjection tree location tags) index.toNat kind mode
+      (fun access =>
+        let normal := commitNormalAccessAt tree location kind tags access
+        let seen := some normal.access
+        match normal.outcome with
+        | .error error => finish ⟨normal.location, seen, some (.CacheFailure range error)⟩
+        | .ok () =>
+          if normal.access.status != .Completed then
+            finish ⟨normal.location, seen, some (.AccessFailure range normal.access.status)⟩
+          else match UniIndex.ofNat? normal.access.root with
+            | none => finish ⟨normal.location, seen,
+                some (.AccessFailure range (.MissingLocationState normal.access.root))⟩
+            | some root =>
+              otherRootsPre tree normal.location (some index) (some root)
+                kind tags mode range seen finish)
+
+theorem locationContract_iff (tree : BorrowTree) (location : LocationTree) (source : Option UniIndex)
+    (kind : AccessKind) (tags : ProtectedTags) (mode : Tree.ChildrenVisitMode) (range : ByteRange)
+    (finish : TreeLocationAccessAtResult → Prop) :
+    finish (tree.performTreeAccessAt location source kind tags mode range) ↔
+      locationContract tree location source kind tags mode range finish := by
+  cases source with
+  | none => exact otherRootsPre_iff tree location none none kind tags mode range none finish
+  | some index =>
+    unfold locationContract
+    dsimp only
+    rw [Tree.NormalTreeState.accessPre_iff]
+    unfold performTreeAccessAt performNormalAccessAt
+    dsimp only [Id.run]
+    generalize commitNormalAccessAt tree location kind tags
+      ((normalProjection tree location tags).performAccess index.toNat kind mode) = normal
+    cases outcome : normal.outcome with
+    | error error => rfl
+    | ok value =>
+      cases value
+      by_cases failed : (normal.access.status != .Completed) = true
+      · simp only [failed, ↓reduceIte]; rfl
+      · simp only [failed, Bool.false_eq_true, ↓reduceIte]
+        cases UniIndex.ofNat? normal.access.root with
+        | none => rfl
+        | some root =>
+          exact otherRootsPre_iff tree normal.location (some index) (some root)
+            kind tags mode range (some normal.access) finish
+
+abbrev Progress :=
+  DedupRangeMap LocationTree × Array BorrowTreeLocationResult × BorrowTreeAccessStatus
+
+/-- One cursor of the interpreter's ranged access loop. The incoming locations
+are the prepared snapshots, and the updated map includes the current commit
+even if the transition or map commit failed. -/
+def advance (tree : BorrowTree) (prepared : IterMutResult LocationTree)
+    (source : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (cursor : Nat) (current : Progress) : Progress :=
+  if current.2.2 == .Completed then
+    match prepared.positions[cursor]?, prepared.segments[cursor]? with
+    | some position, some segment =>
+      let access := tree.performTreeAccessAt segment.data source kind tags mode segment.range
+      let mutation := current.1.setAtPos position access.location
+      let visited := current.2.1.push ⟨segment.range, access.normalAccess⟩
+      let status := match mutation.outcome with
+        | .error error => BorrowTreeAccessStatus.LocationMapFailure segment.range error
+        | .ok () => access.status.getD .Completed
+      (mutation.state, visited, status)
+    | _, _ => (current.1, current.2.1,
+      .RangeMapFailure (.indexOutOfBounds cursor prepared.positions.size))
+  else current
+
+private def advancePre (tree : BorrowTree) (prepared : IterMutResult LocationTree)
+    (source : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (cursor : Nat) (finish : Progress → Prop) (current : Progress) : Prop :=
+  if current.2.2 == .Completed then
+    match prepared.positions[cursor]?, prepared.segments[cursor]? with
+    | some position, some segment =>
+      locationContract tree segment.data source kind tags mode segment.range (fun access =>
+        let mutation := current.1.setAtPos position access.location
+        let visited := current.2.1.push ⟨segment.range, access.normalAccess⟩
+        match mutation.outcome with
+        | .error error => finish (mutation.state, visited, .LocationMapFailure segment.range error)
+        | .ok () => finish (mutation.state, visited, access.status.getD .Completed))
+    | _, _ => finish (current.1, current.2.1,
+      .RangeMapFailure (.indexOutOfBounds cursor prepared.positions.size))
+  else finish current
+
+private theorem advancePre_iff (tree : BorrowTree) (prepared : IterMutResult LocationTree)
+    (source : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (cursor : Nat) (current : Progress) (finish : Progress → Prop) :
+    finish (advance tree prepared source kind tags mode cursor current) ↔
+      advancePre tree prepared source kind tags mode cursor finish current := by
+  unfold advance advancePre
+  by_cases completed : (current.2.2 == .Completed) = true
+  · simp only [completed, ↓reduceIte]
+    cases prepared.positions[cursor]? with
+    | none => rfl
+    | some position =>
+      cases prepared.segments[cursor]? with
+      | none => rfl
+      | some segment =>
+        dsimp only
+        rw [← locationContract_iff]
+        generalize tree.performTreeAccessAt segment.data source kind tags mode segment.range = access
+        cases (current.1.setAtPos position access.location).outcome <;> rfl
+  · simp only [completed, Bool.false_eq_true, ↓reduceIte]
+
+private theorem cursor_equation (tree : BorrowTree) (prepared : IterMutResult LocationTree)
+    (source : Option UniIndex) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (cursor : Nat) (current : Progress) :
+    (do
+      let mut currentMap := current.1
+      let mut visited := current.2.1
+      let mut status := current.2.2
+      if status == .Completed then
+        match prepared.positions[cursor]?, prepared.segments[cursor]? with
+        | some position, some segment =>
+          let access := tree.performTreeAccessAt segment.data source kind tags mode segment.range
+          let mutation := currentMap.setAtPos position access.location
+          currentMap := mutation.state
+          visited := visited.push ⟨segment.range, access.normalAccess⟩
+          match mutation.outcome with
+          | .error error => status := .LocationMapFailure segment.range error
+          | .ok () =>
+            match access.status with
+            | some failure => status := failure
+            | none => pure ()
+        | _, _ => status := .RangeMapFailure (.indexOutOfBounds cursor prepared.positions.size)
+      pure (ForInStep.yield (currentMap, visited, status)) : Id (ForInStep Progress)) =
+      pure (.yield (advance tree prepared source kind tags mode cursor current)) := by
+  rcases current with ⟨map, visited, status⟩
+  by_cases completed : status = .Completed
+  · subst status
+    unfold advance
+    simp only [beq_self_eq_true, ↓reduceIte]
+    cases prepared.positions[cursor]? with
+    | none => rfl
+    | some position =>
+      cases prepared.segments[cursor]? with
+      | none => rfl
+      | some segment =>
+        dsimp only
+        generalize (tree.performTreeAccessAt segment.data source kind tags mode segment.range) = access
+        generalize map.setAtPos position access.location = mutation
+        cases mutation.outcome with
+        | error => rfl
+        | ok value =>
+          cases value
+          cases access.status <;> rfl
+  · simp [advance, completed, pure, Pure.pure]
+
+/-- The source guard for a concrete tag precedes range preparation. For
+wildcard provenance the cursor rule receives no selected concrete source. -/
+def accessContract (tree : BorrowTree) (provenance : ProvenanceExtra) (offset length : Size)
+    (kind : AccessKind) (tags : ProtectedTags) (mode : Tree.ChildrenVisitMode)
+    (finish : BorrowTreeAccessResult → Prop) : Prop :=
+  let source := match provenance with
+    | .concrete tag => tree.indexOfTag tag
+    | .wildcard => none
+  let prepare :=
+    let prepared := tree.locations.iterMut offset length
+    let finishProgress : Progress → Prop := fun (map, visited, status) =>
+      finish ⟨{ tree with locations := map }, visited, status⟩
+    match prepared.outcome with
+    | .error error => finishProgress (prepared.state, #[], .RangeMapFailure error)
+    | .ok () =>
+      segmentsPre (advancePre tree prepared source kind tags mode) finishProgress
+        (List.range' 0 prepared.positions.size) (prepared.state, #[], .Completed)
+  match provenance with
+  | .concrete tag => if source.isNone then finish ⟨tree, #[], .MissingTag tag⟩ else prepare
+  | .wildcard => prepare
+
+/-- The precondition follows the actual ordered iterator and its concrete
+cursor transitions. It applies to every tree, including malformed maps. -/
+theorem accessContract_iff (tree : BorrowTree) (provenance : ProvenanceExtra)
+    (offset length : Size) (kind : AccessKind) (tags : ProtectedTags)
+    (mode : Tree.ChildrenVisitMode) (finish : BorrowTreeAccessResult → Prop) :
+    finish (tree.performBorrowAccessRange provenance offset length kind tags mode) ↔
+      accessContract tree provenance offset length kind tags mode finish := by
+  unfold performBorrowAccessRange accessContract
+  cases provenance
+  case' concrete tag =>
+    cases found : tree.indexOfTag tag
+    case' none => simp only [found, Option.isNone_none, ↓reduceIte, Id.run]; rfl
+    case' some index =>
+      simp only [found, Option.isNone_some, Bool.false_eq_true, ↓reduceIte, Id.run]
+  case' wildcard => simp only [Id.run]
+  all_goals
+    generalize h : tree.locations.iterMut offset length = prepared
+    cases outcome : prepared.outcome with
+    | error error => rfl
+    | ok value =>
+      cases value
+      simp only [Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size,
+        Nat.sub_zero, Nat.add_sub_cancel, Nat.div_one, cursor_equation]
+      exact runSegments (S := Progress) _ _ _ (fun progress =>
+        finish ⟨{ tree with locations := progress.1 }, progress.2.1, progress.2.2⟩) _
+        (advancePre_iff tree prepared _ kind tags mode)
+
+private def findFirstPre {A B : Type} (check : A → (Option B → Prop) → Prop)
+    (finish : Option B → Prop) : List A → Prop
+  | [] => finish none
+  | item :: rest => check item fun
+      | some value => finish (some value)
+      | none => findFirstPre check finish rest
+
+private theorem findFirstPre_iff {A B : Type} (read : A → Option B)
+    (check : A → (Option B → Prop) → Prop)
+    (exactCheck : ∀ item finish, finish (read item) ↔ check item finish)
+    (finish : Option B → Prop) (items : List A) :
+    finish (items.findSome? read) ↔ findFirstPre check finish items := by
+  induction items with
+  | nil => rfl
+  | cons item rest ih =>
+    simp only [List.findSome?_cons, findFirstPre]
+    rw [← exactCheck]
+    cases read item with
+    | none => exact ih
+    | some value => rfl
+
+private def protectionEventsPre (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (events : List Tree.TraversalEvent) (finish : Option UniIndex → Prop) : Prop :=
+  findFirstPre (fun event next => next (strongProtectorAt tree location tags event)) finish events
+
+private theorem protectionEventsPre_iff (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (events : List Tree.TraversalEvent) (finish : Option UniIndex → Prop) :
+    finish (events.findSome? (strongProtectorAt tree location tags)) ↔
+      protectionEventsPre tree location tags events finish :=
+  findFirstPre_iff _ _ (fun _ _ => Iff.rfl) _ _
+
+private def protectionRootsPre (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (topology : Tree.TraversalTree) (accessedRoot : Option UniIndex)
+    (finish : Option UniIndex → Prop) : Prop :=
+  findFirstPre (fun root next =>
+    if accessedRoot == some root then next none
+    else
+      let events := (topology.traverse root.toNat .VisitChildrenOfAccessed []).2
+      protectionEventsPre tree location tags events next) finish tree.roots.reverse.toList
+
+private theorem protectionRootsPre_iff (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (topology : Tree.TraversalTree) (accessedRoot : Option UniIndex)
+    (finish : Option UniIndex → Prop) :
+    finish (findStrongProtectorInOtherRoots tree location tags topology accessedRoot) ↔
+      protectionRootsPre tree location tags topology accessedRoot finish := by
+  unfold findStrongProtectorInOtherRoots protectionRootsPre
+  apply findFirstPre_iff
+  intro root next
+  by_cases same : (accessedRoot == some root) = true
+  · simp only [same, ↓reduceIte]
+  · simp only [same, Bool.false_eq_true, ↓reduceIte]
+    exact protectionEventsPre_iff tree location tags _ next
+
+private def protectorsPre (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (start : Option UniIndex) (finish : Option UniIndex → Prop) : Prop :=
+  let topology := traversalProjection tree
+  match start with
+  | none => protectionRootsPre tree location tags topology none finish
+  | some index =>
+    let (root, events) := topology.traverse index.toNat .VisitChildrenOfAccessed []
+    protectionEventsPre tree location tags events fun
+      | some index => finish (some index)
+      | none => protectionRootsPre tree location tags topology (UniIndex.ofNat? root) finish
+
+private theorem protectorsPre_iff (tree : BorrowTree) (location : LocationTree)
+    (tags : ProtectedTags) (start : Option UniIndex) (finish : Option UniIndex → Prop) :
+    finish (firstStrongProtector tree location tags start) ↔ protectorsPre tree location tags start finish := by
+  cases start with
+  | none => exact protectionRootsPre_iff tree location tags _ none finish
+  | some index =>
+    unfold firstStrongProtector protectorsPre
+    dsimp only
+    generalize (traversalProjection tree).traverse index.toNat .VisitChildrenOfAccessed [] = schedule
+    rcases schedule with ⟨root, events⟩
+    dsimp only
+    rw [← protectionEventsPre_iff]
+    cases events.findSome? (strongProtectorAt tree location tags) with
+    | some index => rfl
+    | none => exact protectionRootsPre_iff tree location tags _ (UniIndex.ofNat? root) finish
+
+private def deallocationCursorPre (tree : BorrowTree) (prepared : IterMutResult LocationTree)
+    (tags : ProtectedTags) (start : Option UniIndex) (cursor : Nat)
+    (finish : Option BorrowTreeDeallocStatus → Prop) : Prop :=
+  match prepared.positions[cursor]?, prepared.segments[cursor]? with
+  | some position, some segment =>
+    protectorsPre tree segment.data tags start fun
+      | some index => finish (some (.ProtectedDealloc segment.range index))
+      | none =>
+        match prepared.state.index position with
+        | .error error => finish (some (.RangeMapFailure error))
+        | .ok _ => finish none
+  | _, _ => finish (some (.RangeMapFailure (.indexOutOfBounds cursor prepared.positions.size)))
+
+private theorem deallocationCursorPre_iff (tree : BorrowTree) (prepared : IterMutResult LocationTree)
+    (tags : ProtectedTags) (start : Option UniIndex) (cursor : Nat)
+    (finish : Option BorrowTreeDeallocStatus → Prop) :
+    finish (deallocationCursor tree prepared tags start cursor) ↔
+      deallocationCursorPre tree prepared tags start cursor finish := by
+  unfold deallocationCursor deallocationCursorPre
+  cases prepared.positions[cursor]? with
+  | none => rfl
+  | some position =>
+    cases prepared.segments[cursor]? with
+    | none => rfl
+    | some segment =>
+      dsimp only
+      rw [← protectorsPre_iff]
+      cases firstStrongProtector tree segment.data tags start with
+      | some index => rfl
+      | none => cases prepared.state.index position <;> rfl
+
+/-- Pull back the postcondition through the source-ordered strong-protector
+checks that follow a deallocation write. -/
+def deallocateAfterWritePre (accessed : BorrowTreeAccessResult) (provenance : Miri.Memory.ProvenanceExtra)
+    (offset length : Size) (tags : ProtectedTags) (finish : BorrowTreeDeallocResult → Prop) : Prop :=
+  if accessed.status != .Completed then finish ⟨accessed.tree, .AccessFailure accessed.status⟩
+  else
+    let start := match provenance with
+      | .concrete tag => accessed.tree.indexOfTag tag
+      | .wildcard => none
+    let scan :=
+      let prepared := accessed.tree.locations.iterMut offset length
+      let updatedTree := { accessed.tree with locations := prepared.state }
+      match prepared.outcome with
+      | .error error => finish ⟨updatedTree, .RangeMapFailure error⟩
+      | .ok () =>
+        findFirstPre (deallocationCursorPre accessed.tree prepared tags start)
+          (fun failure => finish ⟨updatedTree, failure.getD .Deallocated⟩)
+          (List.range' 0 prepared.positions.size)
+    match provenance with
+    | .concrete tag => if start.isNone then finish ⟨accessed.tree, .MissingTag tag⟩ else scan
+    | .wildcard => scan
+
+theorem deallocateAfterWritePre_iff (accessed : BorrowTreeAccessResult)
+    (provenance : Miri.Memory.ProvenanceExtra) (offset length : Size)
+    (tags : ProtectedTags) (finish : BorrowTreeDeallocResult → Prop) :
+    finish (deallocateAfterWrite accessed provenance offset length tags) ↔
+      deallocateAfterWritePre accessed provenance offset length tags finish := by
+  unfold deallocateAfterWrite deallocateAfterWritePre
+  by_cases failed : (accessed.status != .Completed) = true
+  · simp only [failed, ↓reduceIte]; rfl
+  · simp only [failed, Bool.false_eq_true, ↓reduceIte, Id.run]
+    cases provenance
+    case' concrete tag =>
+      cases found : accessed.tree.indexOfTag tag
+      case' none => simp only [found, Option.isNone_none, ↓reduceIte]; rfl
+      case' some index => simp only [found, Option.isNone_some, Bool.false_eq_true, ↓reduceIte]
+    case' wildcard => dsimp only
+    all_goals
+      generalize (accessed.tree.locations.iterMut offset length) = prepared
+      cases prepared.outcome with
+      | error error => rfl
+      | ok value =>
+        cases value
+        exact findFirstPre_iff _ _ (deallocationCursorPre_iff accessed.tree prepared tags _)
+          (fun failure => finish ⟨{ accessed.tree with locations := prepared.state },
+            failure.getD .Deallocated⟩) _
+
+end RangeVerification
+end Miri.TreeBorrows.BorrowTree
+
+namespace Miri.TreeBorrows.BorrowTree.MutationVerification
+
+open Miri.ABI Miri.DataStructures Miri.Memory
+
+/-- Walk the locations in order, stopping at the first failed update. If an
+update changes the cache before failing, the error sees the committed cache. -/
+def locationsPre (update : LocationTree → LocationTree × Except TreeMutationError Unit)
+    (post : BorrowTree → Prop) (failure : TreeMutationError → BorrowTree → Prop) :
+    List Nat → BorrowTree → Prop
+  | [], current => post current
+  | position :: rest, current =>
+    match current.locations.index position with
+    | .error error => failure (.RangeMap error) current
+    | .ok segment =>
+      let (nextLocation, outcome) := update segment.data
+      let mutation := current.locations.setAtPos position nextLocation
+      let after := { current with locations := mutation.state }
+      match outcome, mutation.outcome with
+      | .error error, _ => failure error after
+      | .ok (), .error error => failure (.RangeMap error) after
+      | .ok (), .ok () => locationsPre update post failure rest after
+
+def updateEveryLocationPre (tree : BorrowTree)
+    (update : LocationTree → LocationTree × Except TreeMutationError Unit)
+    (post : BorrowTree → Prop) (failure : TreeMutationError → BorrowTree → Prop) : Prop :=
+  locationsPre update post failure (List.range' 0 tree.locations.entries.size) tree
+
+private theorem updateEveryLocationPre_iff (tree : BorrowTree)
+    (update : LocationTree → LocationTree × Except TreeMutationError Unit)
+    (post : BorrowTree → Prop) (failure : TreeMutationError → BorrowTree → Prop) :
+    updateEveryLocationPre tree update post failure ↔
+      let result := updateEveryLocation tree update
+      match result.outcome with
+      | .error error => failure error result.tree
+      | .ok () => post result.tree := by
+  unfold updateEveryLocationPre updateEveryLocation
+  simp only [Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size,
+    Nat.sub_zero, Nat.add_sub_cancel, Nat.div_one, Id.run]
+  generalize List.range' 0 tree.locations.entries.size = positions
+  induction positions generalizing tree with
+  | nil => rfl
+  | cons position rest ih =>
+    simp only [locationsPre, List.forIn_cons, bind, Bind.bind, pure, Pure.pure]
+    cases found : tree.locations.index position with
+    | error => simp only [found]
+    | ok segment =>
+      rcases effect : update segment.data with ⟨location, outcome⟩
+      cases outcome with
+      | error => simp only [found, effect]
+      | ok value =>
+        cases value
+        cases written : (tree.locations.setAtPos position location).outcome with
+        | error => simp only [found, effect, written]
+        | ok value =>
+          cases value
+          simpa only [found, effect, written, bind, Bind.bind, pure, Pure.pure] using ih
+            { tree with locations := (tree.locations.setAtPos position location).state }
+
+/-- Pull back tag exposure through lookup, publishing the exposed node, and
+the ordered updates of the location caches. -/
+def exposePre (tree : BorrowTree) (protectedTags : ProtectedTags) (tag : BorTag)
+    (post : BorrowTree → Prop) (failure : TreeMutationError → BorrowTree → Prop) : Prop :=
+  match tree.indexOfTag tag with
+  | none => failure (.MissingTag tag) tree
+  | some index =>
+    match tree.nodeAt index with
+    | none => failure (.MissingNode index) tree
+    | some node =>
+      if node.isExposed then post tree
+      else
+        let after := { tree with nodes := tree.nodes.insert index { node with isExposed := true } }
+        updateEveryLocationPre after (fun location =>
+          let state := (location.perms.get index).getD node.defaultLocationState
+          let level := state.permission.strongestAllowedLocalAccess (protectedTags.contains tag)
+          let updated := location.exposedCache.updateExposure after.nodes index .None level
+          ({ location with exposedCache := updated.cache },
+            updated.outcome.mapError TreeMutationError.ExposedCache)) post failure
+
+theorem exposePre_iff (tree : BorrowTree) (protectedTags : ProtectedTags) (tag : BorTag)
+    (post : BorrowTree → Prop) (failure : TreeMutationError → BorrowTree → Prop) :
+    exposePre tree protectedTags tag post failure ↔
+      let result := tree.exposeTag protectedTags tag
+      match result.outcome with
+      | .error error => failure error result.tree
+      | .ok () => post result.tree := by
+  unfold exposePre exposeTag
+  cases indexEq : tree.indexOfTag tag with
+  | none => rfl
+  | some index =>
+    dsimp only [Id.run]
+    cases nodeEq : tree.nodeAt index with
+    | none => simp only [nodeEq]; rfl
+    | some node =>
+      simp only [nodeEq]
+      split
+      · rfl
+      · exact updateEveryLocationPre_iff _ _ _ _
+
+/-- An unexposed tag remains unexposed after releasing its protector. For an
+exposed tag, pull the continuation back through its per-location cache changes. -/
+def releaseExposurePre (tree : BorrowTree) (tag : BorTag) (post : BorrowTree → Prop)
+    (failure : TreeMutationError → BorrowTree → Prop) : Prop :=
+  match tree.indexOfTag tag with
+  | none => failure (.MissingTag tag) tree
+  | some index =>
+    match tree.nodeAt index with
+    | none => failure (.MissingNode index) tree
+    | some node =>
+      if !node.isExposed then post tree
+      else
+        updateEveryLocationPre tree (fun location =>
+          let state := (location.perms.get index).getD node.defaultLocationState
+          let oldLevel := state.permission.strongestAllowedLocalAccess true
+          let level := state.permission.strongestAllowedLocalAccess false
+          let updated := location.exposedCache.updateExposure tree.nodes index oldLevel level
+          ({ location with exposedCache := updated.cache },
+            updated.outcome.mapError TreeMutationError.ExposedCache)) post failure
+
+theorem releaseExposurePre_iff (tree : BorrowTree) (tag : BorTag) (post : BorrowTree → Prop)
+    (failure : TreeMutationError → BorrowTree → Prop) :
+    releaseExposurePre tree tag post failure ↔
+      let result := tree.updateExposureForProtectorRelease tag
+      match result.outcome with
+      | .error error => failure error result.tree
+      | .ok () => post result.tree := by
+  unfold releaseExposurePre updateExposureForProtectorRelease
+  cases indexEq : tree.indexOfTag tag with
+  | none => rfl
+  | some index =>
+    dsimp only [Id.run]
+    cases nodeEq : tree.nodeAt index with
+    | none => simp only [nodeEq]; rfl
+    | some node =>
+      simp only [nodeEq]
+      split
+      · rfl
+      · exact updateEveryLocationPre_iff _ _ _ _
+
+/-- The GC's final pass canonicalizes and merges adjacent location ranges. -/
+def mergeAfterCollectPre (tree : BorrowTree) (post : BorrowTree → Prop)
+    (failure : TreeGcError → BorrowTree → Prop) : Prop :=
+  let canonical := tree.locations.modifyAll fun _ loc => trimLocationForRangeEquality loc
+  let merged := canonical.mergeAdjacentThorough
+  let after := { tree with locations := merged.state }
+  match merged.outcome with
+  | .error error => failure (.RangeMerge error) after
+  | .ok () => post after
+
+/-- GC visits roots in order and only merges after every root succeeds. -/
+def collectRootsPre (live : Array BorTag) (post : BorrowTree → Prop)
+    (failure : TreeGcError → BorrowTree → Prop) : List UniIndex → BorrowTree → Prop
+  | [], tree => mergeAfterCollectPre tree post failure
+  | root :: rest, tree =>
+    let result := removeUselessChildren tree root live
+    match result.outcome with
+    | .error error => failure error result.tree
+    | .ok () => collectRootsPre live post failure rest result.tree
+
+/-- Pull back the continuation across each root's ordered postorder traversal
+and the final merge of adjacent compatible location ranges. -/
+def collectPre (tree : BorrowTree) (live : Array BorTag)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop) : Prop :=
+  collectRootsPre live post failure tree.roots.toList tree
+
+theorem collectPre_iff (tree : BorrowTree) (live : Array BorTag)
+    (post : BorrowTree → Prop) (failure : TreeGcError → BorrowTree → Prop) :
+    collectPre tree live post failure ↔
+      let result := tree.removeUnreachableTags live
+      match result.outcome with
+      | .error error => failure error result.tree
+      | .ok () => post result.tree := by
+  unfold collectPre removeUnreachableTags
+  simp only [← Array.forIn_toList, Id.run]
+  generalize tree.roots.toList = roots
+  induction roots generalizing tree with
+  | nil =>
+    simp only [collectRootsPre, mergeAfterCollectPre, List.forIn_nil, bind, Bind.bind, pure, Pure.pure]
+    cases (DedupRangeMap.mergeAdjacentThorough
+      (tree.locations.modifyAll fun _ loc => trimLocationForRangeEquality loc)).outcome <;> rfl
+  | cons root rest ih =>
+    simp only [collectRootsPre, List.forIn_cons, bind, Bind.bind, pure, Pure.pure]
+    cases processed : (removeUselessChildren tree root live).outcome with
+    | error => simp only [processed]
+    | ok value =>
+      cases value
+      simpa only [processed, bind, Bind.bind, pure, Pure.pure] using ih (removeUselessChildren tree root live).tree
+
+/-- A permission segment checks its initial state and offset before committing
+the range-map mutation, whose partial result survives a failure. -/
+def childSegmentPre (positioned : RangeMapSegment Tree.LocationState) (offset : Size)
+    (index : UniIndex) (held : Bool) (current : BorrowTree)
+    (minimumSifa : IdempotentForeignAccess)
+    (next : BorrowTree → IdempotentForeignAccess → Prop)
+    (failure : ChildInsertError → BorrowTree → Prop) : Prop :=
+  let initial := positioned.data.permission
+  if !initial.isInitial then failure (.InsidePermissionNotInitial initial) current
+  else
+    match initial.strongestIdempotentForeignAccess held with
+    | .ImpossibleProtectedReservedIM => failure (.InsidePermissionInvariant initial) current
+    | .Access expectedSifa =>
+      if positioned.data.idempotentForeignAccess != expectedSifa then
+        failure (.InsideSifaMismatch initial) current
+      else
+        let smallest := weakerSifa minimumSifa positioned.data.idempotentForeignAccess
+        match Size.add (Size.ofBytes positioned.range.start) offset with
+        | .error error => failure (.SizeError error) current
+        | .ok start =>
+          let updated := current.locations.modifyRange start
+            (Size.ofBytes (positioned.range.stop - positioned.range.start)) fun _ location =>
+              { location with perms := location.perms.insert index positioned.data }
+          let after := { current with locations := updated.state }
+          match updated.outcome with
+          | .error error => failure (.RangeMapError error) after
+          | .ok () => next after smallest
+
+def finishChildPre (parent : Option UniIndex) (tree : BorrowTree)
+    (minimumSifa : IdempotentForeignAccess) (post : BorrowTree → Prop)
+    (failure : ChildInsertError → BorrowTree → Prop) : Prop :=
+  match parent with
+  | none => post tree
+  | some parent =>
+    let (after, outcome) := updateSifaAfterRetag tree parent minimumSifa
+    match outcome with
+    | .error error => failure error after
+    | .ok () => post after
+
+def childSegmentsPre (offset : Size) (index : UniIndex) (parent : Option UniIndex)
+    (held : Bool) (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop) :
+    List (RangeMapSegment Tree.LocationState) → BorrowTree → IdempotentForeignAccess → Prop
+  | [], now, minimum => finishChildPre parent now minimum post failure
+  | segment :: rest, now, minimum =>
+    childSegmentPre segment offset index held now minimum
+      (childSegmentsPre offset index parent held post failure rest) failure
+
+def finishInsertedChildPre (tree : BorrowTree) (offset : Size) (parent : Option UniIndex)
+    (tag : BorTag) (index : UniIndex) (inside : DedupRangeMap Tree.LocationState)
+    (outside : Permission) (held : Bool) (defaultSifa : IdempotentForeignAccess)
+    (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop) : Prop :=
+  let node : TreeNode := {
+    tag
+    parent
+    children := #[]
+    defaultInitialPermission := outside
+    defaultInitialSifa := defaultSifa
+    isExposed := false
+  }
+  let inserted := { tree with nodes := tree.nodes.insert index node }
+  let run := fun ready => childSegmentsPre offset index parent held post failure
+    inside.iterAll.toList ready defaultSifa
+  match parent with
+  | none => run { inserted with roots := inserted.roots.push index }
+  | some parent =>
+    match inserted.nodes.get parent with
+    | none => failure (.MissingNode parent) inserted
+    | some parentNode =>
+      let updatedParent := { parentNode with children := parentNode.children.push index }
+      run { inserted with nodes := inserted.nodes.insert parent updatedParent }
+
+/-- Pull back the continuation through mapping insertion and parent lookup
+before checking permissions and committing the node and its ranges. -/
+def insertChildPre (tree : BorrowTree) (offset : Size) (provenance : ProvenanceExtra)
+    (tag : BorTag) (inside : DedupRangeMap Tree.LocationState) (outside : Permission) (held : Bool)
+    (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop) : Prop :=
+  match tree.tagMapping.insert tag with
+  | .DuplicateKeyAfterReplacement mapping _ =>
+    failure (.DuplicateTag tag) { tree with tagMapping := mapping }
+  | .Error mapping _ =>
+    failure (.TagIndexExhausted mapping.size) { tree with tagMapping := mapping }
+  | .Inserted mapping index =>
+    let current := { tree with tagMapping := mapping }
+    let parent := match provenance with
+      | .wildcard => some none
+      | .concrete parent => (tree.tagMapping.get parent).map some
+    match parent with
+    | none =>
+      let name := match provenance with
+        | .concrete parent => parent
+        | .wildcard => tag
+      failure (.MissingParentTag name) current
+    | some parent =>
+      if !outside.isInitial then failure (.OutsidePermissionNotInitial outside) current
+      else if outside.isUnique then failure .OutsideUniquePermission current
+      else
+        match outside.strongestIdempotentForeignAccess held with
+        | .ImpossibleProtectedReservedIM => failure .ProtectedReservedIM current
+        | .Access defaultSifa =>
+          finishInsertedChildPre current offset parent tag index inside outside held defaultSifa post failure
+
+private def insertChildSegments (offset : Size) (index : UniIndex) (parent : Option UniIndex)
+    (held : Bool) (segments : List (RangeMapSegment Tree.LocationState))
+    (current : BorrowTree) (minimumSifa : IdempotentForeignAccess) : ChildInsertResult := Id.run do
+  let mut current := current
+  let mut minimumSifa := minimumSifa
+  for segment in segments do
+    let initial := segment.data.permission
+    if !initial.isInitial then
+      return { tree := current, outcome := .error (.InsidePermissionNotInitial initial) }
+    let expectedSifa := match initial.strongestIdempotentForeignAccess held with
+      | .Access sifa => some sifa
+      | .ImpossibleProtectedReservedIM => none
+    let some expectedSifa := expectedSifa
+      | return { tree := current, outcome := .error (.InsidePermissionInvariant initial) }
+    if segment.data.idempotentForeignAccess != expectedSifa then
+      return { tree := current, outcome := .error (.InsideSifaMismatch initial) }
+    minimumSifa := weakerSifa minimumSifa segment.data.idempotentForeignAccess
+    let start ← match Size.add (Size.ofBytes segment.range.start) offset with
+      | .ok start => pure start
+      | .error error =>
+        return { tree := current, outcome := .error (.SizeError error) }
+    let rangeUpdate := current.locations.modifyRange start
+      (Size.ofBytes (segment.range.stop - segment.range.start)) fun _ location =>
+        { location with perms := location.perms.insert index segment.data }
+    current := { current with locations := rangeUpdate.state }
+    match rangeUpdate.outcome with
+    | .error error => return { tree := current, outcome := .error (.RangeMapError error) }
+    | .ok () => pure ()
+  match parent with
+  | none => return { tree := current, outcome := .ok () }
+  | some parent =>
+    let (updated, outcome) := updateSifaAfterRetag current parent minimumSifa
+    return { tree := updated, outcome }
+
+def childResultPre (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop)
+    (result : ChildInsertResult) : Prop :=
+  match result.outcome with
+  | .error error => failure error result.tree
+  | .ok () => post result.tree
+
+private theorem childSegmentsPre_iff (offset : Size) (index : UniIndex) (parent : Option UniIndex)
+    (held : Bool) (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop)
+    (segments : List (RangeMapSegment Tree.LocationState)) (tree : BorrowTree)
+    (minimumSifa : IdempotentForeignAccess) :
+    childSegmentsPre offset index parent held post failure segments tree minimumSifa ↔
+      childResultPre post failure (insertChildSegments offset index parent held segments tree minimumSifa) := by
+  induction segments generalizing tree minimumSifa with
+  | nil =>
+    simp only [childSegmentsPre, insertChildSegments, finishChildPre, List.forIn_nil,
+      bind, Bind.bind, Id.run, pure, Pure.pure]
+    cases parent with
+    | none => rfl
+    | some parent =>
+      rcases updateSifaAfterRetag tree parent minimumSifa with ⟨after, outcome⟩
+      cases outcome <;> rfl
+  | cons segment rest ih =>
+    simp only [childSegmentsPre, childSegmentPre, insertChildSegments, List.forIn_cons,
+      bind, Bind.bind, Id.run, pure, Pure.pure]
+    cases initial : segment.data.permission.isInitial
+    · simp only [initial, Bool.not_false, ↓reduceIte]
+      rfl
+    · simp only [initial, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+      cases expected : segment.data.permission.strongestIdempotentForeignAccess held with
+      | ImpossibleProtectedReservedIM =>
+        simp only [expected]
+        rfl
+      | Access expectedSifa =>
+        simp only [expected]
+        split
+        · simp_all only [↓reduceIte]
+          rfl
+        · simp_all only [↓reduceIte]
+          cases shifted : Size.add (Size.ofBytes segment.range.start) offset with
+          | error =>
+            simp only [shifted]
+            rfl
+          | ok start =>
+            simp only [shifted]
+            let update := tree.locations.modifyRange start
+              (Size.ofBytes (segment.range.stop - segment.range.start)) fun _ location =>
+                { location with perms := location.perms.insert index segment.data }
+            cases result : update.outcome with
+            | error =>
+              simp only [update] at result
+              simp only [result]
+              rfl
+            | ok value =>
+              cases value
+              simp only [update] at result
+              simpa only [result, insertChildSegments, bind, Bind.bind, Id.run, pure, Pure.pure] using
+                ih { tree with locations := update.state }
+                  (weakerSifa minimumSifa segment.data.idempotentForeignAccess)
+
+theorem insertChildPre_iff (tree : BorrowTree) (offset : Size) (provenance : ProvenanceExtra)
+    (tag : BorTag) (inside : DedupRangeMap Tree.LocationState) (outside : Permission) (held : Bool)
+    (post : BorrowTree → Prop) (failure : ChildInsertError → BorrowTree → Prop) :
+    insertChildPre tree offset provenance tag inside outside held post failure ↔
+      childResultPre post failure (tree.newChild offset provenance tag inside outside held) := by
+  unfold insertChildPre newChild
+  cases mapped : tree.tagMapping.insert tag with
+  | DuplicateKeyAfterReplacement => rfl
+  | Error => rfl
+  | Inserted mapping index =>
+    simp only [Id.run, pure, Pure.pure]
+    generalize (match provenance with
+      | .wildcard => some none
+      | .concrete parent => (tree.tagMapping.get parent).map some) = matched
+    cases matched with
+    | none => rfl
+    | some parent =>
+      cases initialized : outside.isInitial
+      · simp only [initialized, Bool.not_false, ↓reduceIte]
+        rfl
+      · simp only [initialized, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+        cases unique : outside.isUnique
+        · simp only [unique, Bool.false_eq_true, ↓reduceIte]
+          cases sifa : outside.strongestIdempotentForeignAccess held with
+          | ImpossibleProtectedReservedIM =>
+            simp only [sifa]
+            rfl
+          | Access defaultSifa =>
+            simp only [sifa, finishInsertedChildPre]
+            cases parent with
+            | none =>
+              simpa only [insertChildSegments, ← Array.forIn_toList, Id.run, pure, Pure.pure,
+                bind, Bind.bind] using childSegmentsPre_iff offset index none held post failure
+                  inside.iterAll.toList _ defaultSifa
+            | some parent =>
+              dsimp only
+              let nodes := tree.nodes.insert index {
+                tag, parent := some parent, defaultInitialPermission := outside,
+                defaultInitialSifa := defaultSifa
+              }
+              cases found : nodes.get parent with
+              | none =>
+                simp only [nodes] at found
+                simp only [found]
+                rfl
+              | some parentNode =>
+                simp only [nodes] at found
+                simp only [found]
+                simpa only [insertChildSegments, ← Array.forIn_toList, Id.run, pure, Pure.pure,
+                  bind, Bind.bind] using childSegmentsPre_iff offset index (some parent) held post failure
+                    inside.iterAll.toList _ defaultSifa
+        · simp only [unique, ↓reduceIte]
+          rfl
+
+end Miri.TreeBorrows.BorrowTree.MutationVerification

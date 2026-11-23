@@ -40,3 +40,9 @@ import MiriTests.Scheduling.Stateful
 import MiriTests.Step.Driver
 import MiriTests.Verification.DuplicatePrefixOps
 import MiriTests.Verification.StepWP
+import MiriTests.Verification.CallReturnWP
+import MiriTests.Verification.InstructionWP
+import MiriTests.Verification.MemoryWP
+import MiriTests.Verification.RvalueWP
+import MiriTests.Verification.TreeBorrowsWP
+import MiriTests.Verification.TreeEffectsWP

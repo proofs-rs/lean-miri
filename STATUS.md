@@ -831,6 +831,15 @@ vector-clock backend.
   `NormalPost`, and verified programs for the call and the body. Its
   2,318-module closure passed on this library, with a transitive axiom
   audit of 22 client declarations. Timing measurements remain pending.
+  [ExactWP](Miri/Verification/ExactWP.lean) gives `vcgen` an exact
+  one-step continuation for every permitted choice. It covers the driver's
+  MIR dispatch, statement advancement, switch, return and unwind control,
+  and preserves both successors and typed failures. The canonical assignment
+  rules expose rvalue, place, operand and memory effects. The Tree Borrows
+  rules expose ranged access, child insertion, exposure, release, deallocation
+  and collection continuations. Production callbacks and policies still need
+  their own client facts. Whole-body proofs still require loop invariants and
+  contracts for callees reached by the client.
 
 * **Windows / peripheral OS facilities** —
   [WindowsPlatform](Miri/Interpreter/WindowsPlatform.lean), `MiriTests/Native/`

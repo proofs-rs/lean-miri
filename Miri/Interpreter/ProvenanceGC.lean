@@ -130,6 +130,21 @@ structure Hooks (K User : Type) where
 private def lift (value : Except StepError A) : M K User A :=
   match value with | .ok value => pure value | .error error => throw error
 
+/-- Prune one selected allocation. Commit its possibly changed tree before
+reporting a Tree Borrows invariant failure. -/
+def collectTree [DecidableEq K] (id : AllocId)
+    (allocation : Allocation Provenance Miri.TreeBorrows.BorrowTree)
+    (liveTags : Array BorTag) : M K User Unit := do
+  let machine := (← get).machine
+  let result := allocation.extra.removeUnreachableTags liveTags
+  let memory ← match machine.memory.setLiveAllocation id (allocation.setExtra result.tree) with
+    | .ok memory => pure memory
+    | .error error => throw (.invalidProgram s!"GC tree replacement: {reprStr error}")
+  modify fun s => { s with machine := { s.machine with memory } }
+  match result.outcome with
+  | .ok () => pure ()
+  | .error error => throw (.invalidProgram s!"GC tree invariant: {reprStr error}")
+
 /-- Full source collection and pruning order. All live bytes are scanned,
 including leaked allocations. Global compiler allocations count as live via
 MemoryState.isAllocLive but are not prematurely materialized by collection. -/
@@ -146,13 +161,7 @@ def run [DecidableEq K] (h : Hooks K User) : M K User Unit := do
       let machine := (← get).machine
       let some entry := machine.memory.live.find? (·.1 == id) |
         throw (.invalidProgram "GC live allocation disappeared")
-      let result := entry.2.allocation.extra.removeUnreachableTags roots.tags
-      let memory ← lift ((machine.memory.setLiveAllocation id (entry.2.allocation.setExtra result.tree)).mapError
-        (fun error => .invalidProgram s!"GC tree replacement: {reprStr error}"))
-      modify fun s => { s with machine := { s.machine with memory } }
-      match result.outcome with
-      | .ok () => pure ()
-      | .error error => throw (.invalidProgram s!"GC tree invariant: {reprStr error}")
+      collectTree id entry.2.allocation roots.tags
   let machine := (← get).machine
   let live := fun id => roots.allocations.contains id || machine.memory.isAllocLive id
   let allocationSpans := machine.allocationSpans.filter (fun entry => live entry.1)

@@ -1,6 +1,7 @@
 import Miri
 import Miri.Frontend.ImportMIR
 import Miri.Input.ExecutionChoicePolicy
+import Miri.Verification.ExactWP
 import MiriTests
 import Lean
 

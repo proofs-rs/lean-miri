@@ -35,7 +35,8 @@ structure AccessConfig (K User : Type) where
   retainTouched : Machine K User → Option (AllocationAccessRef Provenance BorrowTree) → Machine K User
   memoryError : MemoryOperandError → StepError
 
-private def treeError (write : Bool) (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
+/-- Classify the exact status reported by the Tree Borrows access traversal. -/
+def treeError (write : Bool) (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
   match status with
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)
@@ -43,7 +44,8 @@ private def treeError (write : Bool) (status : BorrowTree.BorrowTreeAccessStatus
     .undefinedBehavior s!"Tree Borrows {if write then "write" else "read"} access: {reprStr status}"
   | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}"
 
-private def bridge (state : AccessState K User) (action : MachineM K User A) :
+/-- Run a machine policy and retain its typed failure alongside the raw hook result. -/
+def bridge (state : AccessState K User) (action : MachineM K User A) :
     MachineHookResult (AccessState K User) A :=
   match action state.machine with
   | .ok value machine => ⟨{ state with machine }, .ok value⟩
@@ -85,12 +87,14 @@ def accessHooks (config : AccessConfig K User) :
   beforeMemoryRead := fun state tree _ id provenance range => memoryAccess config false state tree id provenance range
   beforeMemoryWrite := fun state tree _ id provenance range => memoryAccess config true state tree id provenance range }
 
-private def commit (config : AccessConfig K User)
+/-- Install the raw operation's memory and allocation snapshot on either exit. -/
+def commit (config : AccessConfig K User)
     (memory : MemoryState Provenance BorrowTree K) (hooks : AccessState K User)
     (touched : Option (AllocationAccessRef Provenance BorrowTree)) : M K User Unit :=
   modify fun state => { state with machine := config.retainTouched {hooks.machine with memory} touched }
 
-private def finish (config : AccessConfig K User) (hooks : AccessState K User)
+/-- Restore the typed machine error, when present, at the interpreter boundary. -/
+def finish (config : AccessConfig K User) (hooks : AccessState K User)
     (outcome : Except MemoryOperandError A) : M K User A := do
   match outcome with
   | .ok value => return value

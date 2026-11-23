@@ -33,7 +33,7 @@ structure Hooks (K User : Type) where
   reconstruct : RvalueImmTy Provenance → MPlaceTy Provenance → M K User (RvalueImmTy Provenance)
   writeUninit : MPlaceTy Provenance → M K User Unit
 
-private def checked (operation : String) (value : Except E A) [Repr E] : M K User A :=
+def checked (operation : String) (value : Except E A) [Repr E] : M K User A :=
   match value with
   | .ok value => pure value
   | .error error => throw (.invalidProgram s!"{operation}: {reprStr error}")
@@ -54,7 +54,7 @@ def newPermission (h : Hooks K User) (pointee : TyId) (kind : ReferenceKind)
     if implicitWrites then noWritable ← h.rustcNoWritable defId
   return create ⟨unpin, unsafeUnpin, freeze⟩ kind mode ⟨implicitWrites, noWritable⟩
 
-private def insidePermissions (h : Hooks K User) (budget : Nat)
+def insidePermissions (h : Hooks K User) (budget : Nat)
     (place : MPlaceTy Provenance) (size : Size) (policy : NewPermission) :
     M K User (DedupRangeMap Tree.LocationState) := do
   if !(← h.preciseInteriorMut) then
@@ -71,12 +71,12 @@ private def insidePermissions (h : Hooks K User) (budget : Nat)
     | .ok () => pure ()
     | .error error => throw (.invalidProgram s!"freeze permission range: {reprStr error}")
 
-private def tracker : M K User MachineHooks.BorrowState := do
+def tracker : M K User MachineHooks.BorrowState := do
   match (← get).machine.borrowTracker with
   | some value => return value
   | none => throw (.invalidProgram "Tree Borrows called while disabled")
 
-private def updateTree [DecidableEq K] (allocId : AllocId) (tree : BorrowTree) : M K User Unit := do
+def updateTree [DecidableEq K] (allocId : AllocId) (tree : BorrowTree) : M K User Unit := do
   let state ← get
   let some entry := state.machine.memory.live.find? (fun entry => entry.1 == allocId)
     | throw (.invalidProgram "Tree Borrows allocation extra unavailable")
@@ -84,7 +84,7 @@ private def updateTree [DecidableEq K] (allocId : AllocId) (tree : BorrowTree) :
     (state.machine.memory.setLiveAllocation allocId (entry.2.allocation.setExtra tree))
   set { state with machine := { state.machine with memory } }
 
-private def getTree (allocId : AllocId) : M K User BorrowTree := do
+def getTree (allocId : AllocId) : M K User BorrowTree := do
   let some entry := (← get).machine.memory.live.find? (fun entry => entry.1 == allocId)
     | throw (.invalidProgram "Tree Borrows allocation extra unavailable")
   return entry.2.allocation.extra
@@ -93,7 +93,7 @@ private def getTree (allocId : AllocId) : M K User BorrowTree := do
 Pinned tree_borrows/mod.rs passes AccessCause::Reborrow(access), whose primary
 diagnostic is `reborrow` even when its associated access is a read or write.
 Other hook errors and the later uninitialization write retain their own cause. -/
-private def reborrowAccessError (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
+def reborrowAccessError (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
   match status with
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)

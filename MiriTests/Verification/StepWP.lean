@@ -1,4 +1,4 @@
-import Miri.Verification.StepWP
+import Miri.Verification.ExactWP
 import MiriTests.ControlFlow.Transitions
 
 /-! The control-flow fixture runs the original Step driver and ControlFlow

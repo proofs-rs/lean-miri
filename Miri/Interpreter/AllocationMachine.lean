@@ -34,7 +34,20 @@ def deallocationError : MemoryLifecycleError → StepError
   | .hookFailure hook reason => .callback s!"{hook}: {reason}"
   | error => .invalidProgram s!"unexpected deallocation source failure: {reprStr error}"
 
-private def before (h : DeallocationHooks K User Payload)
+/-- Retain the detached allocation's Tree Borrows mutation before classifying
+the terminal status. Deallocation already removed it from the live map. -/
+def treeDeallocation
+    (retainDetached : Allocation Provenance BorrowTree → PlaceMachine.Machine K User →
+      PlaceMachine.Machine K User)
+    (allocation : Allocation Provenance BorrowTree) (provenance : ProvenanceExtra) (size : Size) :
+    PlaceMachine.MachineM K User Unit := do
+  if let some tracker := (← get).borrowTracker then
+    let result := allocation.extra.deallocateBorrowRange provenance Size.ZERO size tracker.global.protectedTags
+    modify (retainDetached (allocation.setExtra result.tree))
+    if result.status != .Deallocated then
+      throw (.undefinedBehavior s!"Tree Borrows deallocation: {reprStr result.status}")
+
+def beforeDeallocation (h : DeallocationHooks K User Payload)
     (allocation : Allocation Provenance BorrowTree) (id : AllocId)
     (provenance : ProvenanceExtra) (size : Size) (align : Align) (kind : MemoryKind K) :
     PlaceMachine.MachineM K User Unit := do
@@ -44,11 +57,7 @@ private def before (h : DeallocationHooks K User Payload)
   let (machine,result) := MachineHooks.memoryRaceAccess (← get) id ⟨Size.ZERO,size⟩ (some .Deallocate) .Read
   set machine
   match result with | .error error => throw error | .ok () => pure ()
-  if let some tracker := (← get).borrowTracker then
-    let result := allocation.extra.deallocateBorrowRange provenance Size.ZERO size tracker.global.protectedTags
-    modify (h.retainDetached (allocation.setExtra result.tree))
-    if result.status != .Deallocated then
-      throw (.undefinedBehavior s!"Tree Borrows deallocation: {reprStr result.status}")
+  treeDeallocation h.retainDetached allocation provenance size
   MemoryExtras.beforeDeallocationSync h.extras id
   let span ← h.currentSpan
   modify fun machine => {machine with allocationSpans := machine.allocationSpans.map fun (old,allocated,freed) =>
@@ -64,7 +73,7 @@ private def callback (h : DeallocationHooks K User Payload)
     (size : Size) (align : Align) (kind : MemoryKind K) :
     MemoryStateHookResult Provenance BorrowTree K (PlaceMachine.AccessState K User) Unit :=
   let state := {state with machine := {state.machine with memory}}
-  match before h allocation id provenance size align kind state.machine with
+  match beforeDeallocation h allocation id provenance size align kind state.machine with
   | .ok value machine => ⟨machine.memory,{state with machine},.ok value⟩
   | .error error machine => ⟨machine.memory,⟨machine,some error⟩,.error (reprStr error)⟩
 

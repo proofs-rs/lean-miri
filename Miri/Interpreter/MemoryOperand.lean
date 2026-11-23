@@ -79,13 +79,13 @@ abbrev DynamicLayoutResolver (Prov Extra MachineKind HookState : Type) :=
   MemoryState Prov Extra MachineKind → HookState → MemoryOperandPlace Prov →
     DynamicLayoutResult Prov Extra MachineKind HookState
 
-private def pointerArithmeticFor (layout : RuntimeTargetDataLayout) :
+def pointerArithmeticFor (layout : RuntimeTargetDataLayout) :
     Except MemoryOperandError PointerArithmetic := do
   let pointerSize ← layout.pointerSizeIn layout.defaultAddressSpace
     |>.mapError MemoryOperandError.runtimeLayout
   return ⟨pointerSize⟩
 
-private def selectedSizeAndAlign
+def selectedSizeAndAlign
     (memory : MemoryState Prov Extra MachineKind) (hooks : HookState)
     (place : MemoryOperandPlace Prov)
     (dynamicLayout : DynamicLayoutResolver Prov Extra MachineKind HookState) :
@@ -100,7 +100,8 @@ private def selectedSizeAndAlign
           .ok (dynamic?.getD (place.layout.size, place.layout.align)))
   return (memory, hooks, .ok (place.layout.size, place.layout.align))
 
-private def finishPlaceAccess
+/-- Apply the cached misalignment check after allocation access preserves its result. -/
+def finishPlaceAccess
     (result : PtrAllocationResult Prov Extra MachineKind HookState
       (Option (AllocationAccessRef Prov Extra)))
     (misaligned : Option Misalignment) :
@@ -216,7 +217,7 @@ private def scalarMatchesPrimitive [PointerProvenance Prov]
 /-- The source `Immediate::assert_matches_abi` check, with its assertion and
 bug outcomes retained as explicit errors. This runs before mutable place
 access in `write_immediate_to_mplace_no_validate`. -/
-private def immediateMatchesAbi [PointerProvenance Prov]
+def immediateMatchesAbi [PointerProvenance Prov]
     (value : Immediate Prov) (layout : MemoryOperandLayout)
     (runtime : RuntimeTargetDataLayout) : Except MemoryOperandError Unit := do
   match value, layout.backendRepr with
@@ -271,6 +272,17 @@ private def writeUninitFull [DecidableEq MachineKind]
   let mutation := Allocation.writeUninit reference.range pointerSize reference.allocation
   return commitAllocationMutation memory hooks reference mutation
 
+/-- Uninitialize the entire actual allocation subrange, including the
+dynamic part of an unsized place. The access effects precede the write. -/
+def uninitWriteAfterAccess [DecidableEq MachineKind] (pointerSize : Size)
+    (access : MemoryOperandResult Prov Extra MachineKind HookState (Option (AllocationAccessRef Prov Extra))) :
+    MemoryOperandResult Prov Extra MachineKind HookState Unit :=
+  match access.outcome with
+  | .error error => ⟨access.memory, access.hooks, access.touched, .error error⟩
+  | .ok none => ⟨access.memory, access.hooks, access.touched, .ok ()⟩
+  | .ok (some reference) =>
+    writeUninitFull access.memory access.hooks reference pointerSize
+
 /-- Pinned place.rs::write_uninit for an existing memory place. Unlike an
 immediate write, this operation accepts unsized destinations and obtains their
 actual dynamic range before performing the ordinary mutable access checks. -/
@@ -284,11 +296,45 @@ def writeUninitToMplace [DecidableEq MachineKind]
     MemoryOperandResult Prov Extra MachineKind HookState Unit := Id.run do
   let access := getPlaceAllocMut memory hooks place runtime ghostMode globalKind
     globalHooks accessHooks dynamicLayout
-  match access.outcome with
-  | .error error => return ⟨access.memory, access.hooks, access.touched, .error error⟩
-  | .ok none => return ⟨access.memory, access.hooks, access.touched, .ok ()⟩
-  | .ok (some reference) =>
-    return writeUninitFull access.memory access.hooks reference runtime.pointerSize
+  return uninitWriteAfterAccess runtime.pointerSize access
+
+/-- Load the components selected by the ABI from the acquired reference.
+The read keeps all access effects on either result. -/
+def readImmediateAfterAccess [DecidableEq Prov] [PointerProvenance Prov]
+    (layout : MemoryOperandLayout) (runtime : RuntimeTargetDataLayout)
+    (access : MemoryOperandResult Prov Extra MachineKind HookState (Option (AllocationAccessRef Prov Extra))) :
+    MemoryOperandResult Prov Extra MachineKind HookState (Option (ImmediateValue Prov)) := Id.run do
+  let reference? ← match access.outcome with
+    | .error error =>
+        return ⟨access.memory, access.hooks, access.touched, .error error⟩
+    | .ok reference? => pure reference?
+  let some reference := reference?
+    | return ⟨access.memory, access.hooks, access.touched,
+        .ok (some ⟨.uninit, layout⟩)⟩
+  let plan ← match readPlan layout runtime with
+    | .ok plan => pure plan
+    | .error error =>
+        return ⟨access.memory, access.hooks, access.touched, .error error⟩
+  match plan with
+  | none => return ⟨access.memory, access.hooks, access.touched, .ok none⟩
+  | some (.scalar size readProvenance) =>
+      match readScalarAt reference runtime Size.ZERO size readProvenance with
+      | .ok scalar =>
+          return ⟨access.memory, access.hooks, access.touched,
+            .ok (some ⟨.scalar scalar, layout⟩)⟩
+      | .error error =>
+          return ⟨access.memory, access.hooks, access.touched, .error error⟩
+  | some (.pair aSize bSize bOffset aReadProvenance bReadProvenance) =>
+      match readScalarAt reference runtime Size.ZERO aSize aReadProvenance with
+      | .error error =>
+          return ⟨access.memory, access.hooks, access.touched, .error error⟩
+      | .ok a =>
+        match readScalarAt reference runtime bOffset bSize bReadProvenance with
+        | .error error =>
+            return ⟨access.memory, access.hooks, access.touched, .error error⟩
+        | .ok b =>
+            return ⟨access.memory, access.hooks, access.touched,
+              .ok (some ⟨.scalarPair a b, layout⟩)⟩
 
 /-! Source `read_immediate_from_mplace_raw`. In particular, an unsized layout
 returns before touching memory; a zero-sized access with no allocation becomes
@@ -307,37 +353,20 @@ def readImmediateFromMplaceRaw [DecidableEq MachineKind] [DecidableEq Prov]
     return ⟨memory, hooks, none, .ok none⟩
   let access := getPlaceAlloc memory hooks place runtime ghostMode globalKind
       globalHooks accessHooks dynamicLayout
-  let reference? ← match access.outcome with
-    | .error error =>
-        return ⟨access.memory, access.hooks, access.touched, .error error⟩
-    | .ok reference? => pure reference?
-  let some reference := reference?
-    | return ⟨access.memory, access.hooks, access.touched,
-        .ok (some ⟨.uninit, place.layout⟩)⟩
-  let plan ← match readPlan place.layout runtime with
-    | .ok plan => pure plan
-    | .error error =>
-        return ⟨access.memory, access.hooks, access.touched, .error error⟩
-  match plan with
-  | none => return ⟨access.memory, access.hooks, access.touched, .ok none⟩
-  | some (.scalar size readProvenance) =>
-      match readScalarAt reference runtime Size.ZERO size readProvenance with
-      | .ok scalar =>
-          return ⟨access.memory, access.hooks, access.touched,
-            .ok (some ⟨.scalar scalar, place.layout⟩)⟩
-      | .error error =>
-          return ⟨access.memory, access.hooks, access.touched, .error error⟩
-  | some (.pair aSize bSize bOffset aReadProvenance bReadProvenance) =>
-      match readScalarAt reference runtime Size.ZERO aSize aReadProvenance with
-      | .error error =>
-          return ⟨access.memory, access.hooks, access.touched, .error error⟩
-      | .ok a =>
-        match readScalarAt reference runtime bOffset bSize bReadProvenance with
-        | .error error =>
-            return ⟨access.memory, access.hooks, access.touched, .error error⟩
-        | .ok b =>
-            return ⟨access.memory, access.hooks, access.touched,
-              .ok (some ⟨.scalarPair a b, place.layout⟩)⟩
+  return readImmediateAfterAccess place.layout runtime access
+
+/-- Materialize a loaded immediate or preserve the indirect place when the
+initialization or ABI does not permit loading it. -/
+def finishRawOperandRead (typedPlace : MemoryOperandPlace Prov)
+    (read : MemoryOperandResult Prov Extra MachineKind HookState (Option (ImmediateValue Prov))) :
+    MemoryOperandResult Prov Extra MachineKind HookState (ImmediateOrPlace Prov) :=
+  match read.outcome with
+  | .error error =>
+    ⟨read.memory, read.hooks, read.touched, .error error⟩
+  | .ok (some value) =>
+    ⟨read.memory, read.hooks, read.touched, .ok (.immediate value)⟩
+  | .ok none =>
+    ⟨read.memory, read.hooks, read.touched, .ok (.place typedPlace)⟩
 
 /-! Raw operand reads retain the source's memory fallback. The caller supplies
 the layout cached on the source `OpTy`; a local-to-place projection that must
@@ -359,18 +388,28 @@ def readImmediateRaw [DecidableEq MachineKind] [DecidableEq Prov]
       let typedPlace : MemoryOperandPlace Prov := ⟨mplace, layout⟩
       let read := readImmediateFromMplaceRaw memory hooks typedPlace runtime ghostMode
           globalKind globalHooks accessHooks dynamicLayout
-      match read.outcome with
-      | .error error =>
-          return ⟨read.memory, read.hooks, read.touched, .error error⟩
-      | .ok (some value) =>
-          return ⟨read.memory, read.hooks, read.touched, .ok (.immediate value)⟩
-      | .ok none =>
-          return ⟨read.memory, read.hooks, read.touched, .ok (.place typedPlace)⟩
+      return finishRawOperandRead typedPlace read
 
-private def isPrimitiveReadable : BackendRepr → Bool
+def isPrimitiveReadable : BackendRepr → Bool
   | .Scalar (.Initialized ..) => true
   | .ScalarPair (a := .Initialized ..) (b := .Initialized ..) => true
   | _ => false
+
+/-- The primitive read must load an initialized value. This check precedes
+passing the bytes to the caller and retains the read effects on failure. -/
+def finishImmediateRead
+    (read : MemoryOperandResult Prov Extra MachineKind HookState (ImmediateOrPlace Prov)) :
+    MemoryOperandResult Prov Extra MachineKind HookState (ImmediateValue Prov) :=
+  match read.outcome with
+  | .error error =>
+     ⟨read.memory, read.hooks, read.touched, .error error⟩
+  | .ok (.place _) =>
+     ⟨read.memory, read.hooks, read.touched, .error .rawReadReturnedPlace⟩
+  | .ok (.immediate value) =>
+      match value.value with
+      | .uninit =>
+         ⟨read.memory, read.hooks, read.touched, .error .invalidUninitBytes⟩
+      | _ => ⟨read.memory, read.hooks, read.touched, .ok value⟩
 
 /-! Source `read_immediate`, with the source span-bug and UB branches made
 explicit. Unavailable pointer/machine semantics are retained by the wrapped
@@ -389,16 +428,7 @@ def readImmediate [DecidableEq MachineKind] [DecidableEq Prov]
     return ⟨memory, hooks, none, .error .invalidPrimitiveRead⟩
   let read := readImmediateRaw memory hooks operand layout runtime ghostMode globalKind
       globalHooks accessHooks dynamicLayout
-  match read.outcome with
-  | .error error =>
-      return ⟨read.memory, read.hooks, read.touched, .error error⟩
-  | .ok (.place _) =>
-      return ⟨read.memory, read.hooks, read.touched, .error .rawReadReturnedPlace⟩
-  | .ok (.immediate value) =>
-      match value.value with
-      | .uninit =>
-          return ⟨read.memory, read.hooks, read.touched, .error .invalidUninitBytes⟩
-      | _ => return ⟨read.memory, read.hooks, read.touched, .ok value⟩
+  return finishImmediateRead read
 
 def readScalar [DecidableEq MachineKind] [DecidableEq Prov]
     [PointerProvenance Prov]
@@ -421,29 +451,13 @@ def readScalar [DecidableEq MachineKind] [DecidableEq Prov]
           return ⟨read.memory, read.hooks, read.touched,
             .error (.immediate error)⟩
 
-/-! Source `write_immediate_to_mplace_no_validate`. The ABI assertion precedes
-pointer access; the scalar-pair offset assertion follows mutable place access;
-padding is cleared before either component write; and each allocation update
-is committed before the next operation so later failures retain partial state.
-Machine validity policy is an explicit input, matching `M::enforce_validity`. -/
-def writeImmediateToMplaceNoValidate [DecidableEq MachineKind]
-    [DecidableEq Prov] [PointerProvenance Prov]
-    (memory : MemoryState Prov Extra MachineKind) (hooks : HookState)
-    (value : Immediate Prov) (place : MemoryOperandPlace Prov)
-    (runtime : RuntimeTargetDataLayout) (ghostMode : Bool)
-    (globalKind : Option MachineKind)
-    (globalHooks : GlobalAllocationHooks Prov Extra MachineKind HookState)
-    (accessHooks : AllocationAccessHooks Prov Extra MachineKind HookState ProvExtra)
-    (dynamicLayout : DynamicLayoutResolver Prov Extra MachineKind HookState)
-    (willLaterValidate : MemoryOperandLayout → Bool) :
+/-- Consume a completed place access in the existing write order. Padding,
+both scalar writes, and their partial cache updates stay observable. -/
+def writeImmediateAfterAccess [DecidableEq MachineKind] [DecidableEq Prov] [PointerProvenance Prov]
+    (value : Immediate Prov) (layout : MemoryOperandLayout) (runtime : RuntimeTargetDataLayout)
+    (willLaterValidate : MemoryOperandLayout → Bool)
+    (access : MemoryOperandResult Prov Extra MachineKind HookState (Option (AllocationAccessRef Prov Extra))) :
     MemoryOperandResult Prov Extra MachineKind HookState Unit := Id.run do
-  if place.layout.backendRepr.isUnsized then
-    return ⟨memory, hooks, none, .error .unsizedImmediateWrite⟩
-  match immediateMatchesAbi value place.layout runtime with
-  | .error error => return ⟨memory, hooks, none, .error error⟩
-  | .ok () => pure ()
-  let access := getPlaceAllocMut memory hooks place runtime ghostMode globalKind
-      globalHooks accessHooks dynamicLayout
   let reference? ← match access.outcome with
     | .error error =>
         return ⟨access.memory, access.hooks, access.touched, .error error⟩
@@ -454,7 +468,7 @@ def writeImmediateToMplaceNoValidate [DecidableEq MachineKind]
   | .scalar scalar =>
       return writeScalarAt access.memory access.hooks reference runtime Size.ZERO scalar
   | .scalarPair a b =>
-      let .ScalarPair (bOffset := bOffset) .. := place.layout.backendRepr
+      let .ScalarPair (bOffset := bOffset) .. := layout.backendRepr
         | return ⟨access.memory, access.hooks, some reference,
             .error .immediateAbiMismatch⟩
       if bOffset.bytes == 0 then
@@ -468,7 +482,7 @@ def writeImmediateToMplaceNoValidate [DecidableEq MachineKind]
       let mut currentMemory := access.memory
       let mut currentHooks := access.hooks
       let mut currentReference := reference
-      if !willLaterValidate place.layout && componentSize != place.layout.size then
+      if !willLaterValidate layout && componentSize != layout.size then
         let clear := writeUninitFull currentMemory currentHooks currentReference
           runtime.pointerSize
         currentMemory := clear.memory
@@ -501,6 +515,31 @@ def writeImmediateToMplaceNoValidate [DecidableEq MachineKind]
   | .uninit =>
       return writeUninitFull access.memory access.hooks reference runtime.pointerSize
 
+/-! Source `write_immediate_to_mplace_no_validate`. The ABI assertion precedes
+pointer access; the scalar-pair offset assertion follows mutable place access;
+padding is cleared before either component write; and each allocation update
+is committed before the next operation so later failures retain partial state.
+Machine validity policy is an explicit input, matching `M::enforce_validity`. -/
+def writeImmediateToMplaceNoValidate [DecidableEq MachineKind]
+    [DecidableEq Prov] [PointerProvenance Prov]
+    (memory : MemoryState Prov Extra MachineKind) (hooks : HookState)
+    (value : Immediate Prov) (place : MemoryOperandPlace Prov)
+    (runtime : RuntimeTargetDataLayout) (ghostMode : Bool)
+    (globalKind : Option MachineKind)
+    (globalHooks : GlobalAllocationHooks Prov Extra MachineKind HookState)
+    (accessHooks : AllocationAccessHooks Prov Extra MachineKind HookState ProvExtra)
+    (dynamicLayout : DynamicLayoutResolver Prov Extra MachineKind HookState)
+    (willLaterValidate : MemoryOperandLayout → Bool) :
+    MemoryOperandResult Prov Extra MachineKind HookState Unit := Id.run do
+  if place.layout.backendRepr.isUnsized then
+    return ⟨memory, hooks, none, .error .unsizedImmediateWrite⟩
+  match immediateMatchesAbi value place.layout runtime with
+  | .error error => return ⟨memory, hooks, none, .error error⟩
+  | .ok () => pure ()
+  let access := getPlaceAllocMut memory hooks place runtime ghostMode globalKind
+      globalHooks accessHooks dynamicLayout
+  return writeImmediateAfterAccess value place.layout runtime willLaterValidate access
+
 theorem unsized_raw_read_does_not_call_dynamic_access
     [DecidableEq MachineKind] [DecidableEq Prov] [PointerProvenance Prov]
     (memory : MemoryState Prov Extra MachineKind) (hooks : HookState)
@@ -527,7 +566,7 @@ theorem zero_uninit_full_write {P E K H X : Type} [DecidableEq K]
     writeUninitToMplace memory hooks
       ⟨⟨pointer, .none, none⟩, ⟨Size.ZERO, Align.ONE, .Memory (sized := true), ty⟩⟩
       runtime ghost kind globals access dynamic = ⟨memory, hooks, none, .ok ()⟩ := by
-  unfold writeUninitToMplace getPlaceAllocMut selectedSizeAndAlign pointerArithmeticFor
+  unfold writeUninitToMplace getPlaceAllocMut selectedSizeAndAlign pointerArithmeticFor uninitWriteAfterAccess
   simp only [BackendRepr.isUnsized]
   rw [pointerMetadata]
   cases ghost <;> with_unfolding_all rfl
@@ -549,7 +588,7 @@ theorem zero_uninit_write {P E K H X : Type} [DecidableEq K]
       ⟨⟨pointer, .none, none⟩, ⟨Size.ZERO, Align.ONE, .Memory (sized := true), ty⟩⟩
       runtime ghost kind globals access dynamic later =
       ⟨memory, hooks, none, .ok ()⟩ := by
-  unfold writeImmediateToMplaceNoValidate getPlaceAllocMut
+  unfold writeImmediateToMplaceNoValidate getPlaceAllocMut writeImmediateAfterAccess
   simp only [BackendRepr.isUnsized]
   unfold immediateMatchesAbi selectedSizeAndAlign pointerArithmeticFor
   simp only [BackendRepr.isUnsized]
@@ -625,7 +664,7 @@ theorem writeImmediate_scalar_of_access
     rw [width]
     cases primitive : abi.primitive <;>
       simp_all [bind,Bind.bind,Except.bind,Except.mapError,pure,Pure.pure,Except.pure]
-  unfold writeImmediateToMplaceNoValidate
+  unfold writeImmediateToMplaceNoValidate writeImmediateAfterAccess
   simp only [backend,BackendRepr.isUnsized,Bool.false_eq_true,↓reduceIte]
   rw [abiOk]
   dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
@@ -748,7 +787,7 @@ theorem writeImmediate_pair_of_access
   have bWrite := scalar_at_of_write middleMemory afterMemory hooks
     (⟨id,allocRange Size.ZERO place.layout.size,middle⟩ : AllocationAccessRef P E) runtime offset second
     (allocRange offset second.size) after (offset_subrange _ _ _ bound) writtenB cacheB
-  unfold writeImmediateToMplaceNoValidate
+  unfold writeImmediateToMplaceNoValidate writeImmediateAfterAccess
   simp only [backend,BackendRepr.isUnsized,Bool.false_eq_true,↓reduceIte]
   rw [abiOk]
   dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
@@ -761,4 +800,137 @@ theorem writeImmediate_pair_of_access
   rw [aWrite]
   dsimp only [bind,Bind.bind,pure,Pure.pure]
   rw [bWrite]
+end Miri.Interpreter
+
+namespace Miri.Interpreter
+open Miri.ABI Miri.Memory
+
+variable {P E K H X : Type} [DecidableEq K]
+
+/-- A sized memory place skips dynamic layout. Alignment is checked only
+after the allocation access, retaining the hook's updated snapshot. -/
+theorem sizedPlaceAccess
+    (write : Bool) (memory : MemoryState P E K) (hooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (pointerSize : Size) (ghost : Bool) (kind : Option K)
+    (global : GlobalAllocationHooks P E K H) (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H)
+    (sized : place.layout.backendRepr.isUnsized = false)
+    (pointer : runtime.pointerSizeIn runtime.defaultAddressSpace = .ok pointerSize) :
+    (if write then getPlaceAllocMut memory hooks place runtime ghost kind global access dynamic
+      else getPlaceAlloc memory hooks place runtime ghost kind global access dynamic) =
+      finishPlaceAccess
+        (if write then AllocationAccess.getPtrAllocMut memory hooks ⟨pointerSize⟩ place.mplace.ptr
+            place.layout.size ghost kind global access
+          else AllocationAccess.getPtrAlloc memory hooks ⟨pointerSize⟩ place.mplace.ptr
+            place.layout.size ghost kind global access)
+        place.mplace.misaligned := by
+  cases write <;>
+    simp only [Bool.false_eq_true, ↓reduceIte, getPlaceAlloc, getPlaceAllocMut,
+      selectedSizeAndAlign, sized, pointerArithmeticFor, pointer, Except.mapError,
+      Id.run, bind, Bind.bind, Except.bind, pure, Pure.pure, Except.pure]
+
+/-- A sized ABI-checked write reaches the actual mutable-place access.
+The selected continuation still performs padding and byte-level effects. -/
+theorem immediateWrite_eq_afterAccess [DecidableEq P] [PointerProvenance P]
+    (memory : MemoryState P E K) (hooks : H) (value : Immediate P) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (ghost : Bool) (kind : Option K)
+    (global : GlobalAllocationHooks P E K H) (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H) (later : MemoryOperandLayout → Bool)
+    (sized : place.layout.backendRepr.isUnsized = false)
+    (abi : immediateMatchesAbi value place.layout runtime = .ok ()) :
+    writeImmediateToMplaceNoValidate memory hooks value place runtime ghost kind global access dynamic later =
+      writeImmediateAfterAccess value place.layout runtime later
+        (getPlaceAllocMut memory hooks place runtime ghost kind global access dynamic) := by
+  simp only [writeImmediateToMplaceNoValidate, sized, Bool.false_eq_true, ↓reduceIte, abi,
+    Id.run, pure, Pure.pure]
+
+/-- A raw indirect read of a sized place reaches the production memory
+access whether its ABI is a scalar, pair, or opaque memory. -/
+theorem rawRead_eq_afterAccess [DecidableEq P] [PointerProvenance P]
+    (memory : MemoryState P E K) (hooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (ghost : Bool) (kind : Option K)
+    (global : GlobalAllocationHooks P E K H) (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H)
+    (sized : place.layout.backendRepr.isUnsized = false) :
+    readImmediateRaw memory hooks (.indirect place.mplace) place.layout runtime ghost kind global access dynamic =
+      finishRawOperandRead place (readImmediateAfterAccess place.layout runtime
+        (getPlaceAlloc memory hooks place runtime ghost kind global access dynamic)) := by
+  simp only [readImmediateRaw, readImmediateFromMplaceRaw, sized, Bool.false_eq_true, ↓reduceIte,
+    Id.run, pure, Pure.pure]
+
+/-- A primitive scalar or scalar-pair read reaches the same raw access, then
+requires an initialized value before passing it on. -/
+theorem immediateRead_eq_afterAccess [DecidableEq P] [PointerProvenance P]
+    (memory : MemoryState P E K) (hooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (ghost : Bool) (kind : Option K)
+    (global : GlobalAllocationHooks P E K H) (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H)
+    (sized : place.layout.backendRepr.isUnsized = false)
+    (readable : isPrimitiveReadable place.layout.backendRepr = true) :
+    readImmediate memory hooks (.indirect place.mplace) place.layout runtime ghost kind global access dynamic =
+      finishImmediateRead (finishRawOperandRead place (readImmediateAfterAccess place.layout runtime
+        (getPlaceAlloc memory hooks place runtime ghost kind global access dynamic))) := by
+  unfold readImmediate
+  simp only [readable, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Id.run, pure, Pure.pure]
+  rw [rawRead_eq_afterAccess _ _ place _ _ _ _ _ _ sized]
+
+/-- When runtime layout resolves an unsized place, feed its selected size
+and updated memory and hooks to the ordinary pointer-access operation. -/
+theorem unsizedPlaceAccessMut
+    (memory afterMemory : MemoryState P E K) (hooks afterHooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (pointerSize size : Size) (align : Align)
+    (ghost : Bool) (kind : Option K) (global : GlobalAllocationHooks P E K H)
+    (access : AllocationAccessHooks P E K H X) (dynamic : DynamicLayoutResolver P E K H)
+    (unsized : place.layout.backendRepr.isUnsized = true)
+    (resolved : dynamic memory hooks place = ⟨afterMemory, afterHooks, .ok (some (size, align))⟩)
+    (pointer : runtime.pointerSizeIn runtime.defaultAddressSpace = .ok pointerSize) :
+    getPlaceAllocMut memory hooks place runtime ghost kind global access dynamic =
+      finishPlaceAccess
+        (AllocationAccess.getPtrAllocMut afterMemory afterHooks ⟨pointerSize⟩ place.mplace.ptr
+          size ghost kind global access) place.mplace.misaligned := by
+  simp only [getPlaceAllocMut, selectedSizeAndAlign, unsized, ↓reduceIte, resolved, Option.getD_some,
+    pointerArithmeticFor, pointer, Id.run, bind, Bind.bind, pure, Pure.pure, Except.bind, Except.mapError,
+    Except.pure]
+
+/-- Specialize the primitive continuation to a single initialized ABI scalar. -/
+def scalarReadAfterAccess [DecidableEq P] [PointerProvenance P]
+    (layout : MemoryOperandLayout) (primitive : BackendPrimitive) (runtime : RuntimeTargetDataLayout)
+    (access : MemoryOperandResult P E K H (Option (AllocationAccessRef P E))) :
+    MemoryOperandResult P E K H (ImmediateValue P) :=
+  let result := match access.outcome with
+    | .error error => .error error
+    | .ok none => .error .invalidUninitBytes
+    | .ok (some reference) =>
+      (readScalarAt reference runtime Size.ZERO layout.size (scalarReadProvenance primitive)).map
+        (fun scalar => ⟨.scalar scalar, layout⟩)
+  ⟨access.memory, access.hooks, access.touched, result⟩
+
+theorem scalarRead_eq_afterAccess [DecidableEq P] [PointerProvenance P]
+    (memory : MemoryState P E K) (hooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (ghost : Bool) (kind : Option K)
+    (global : GlobalAllocationHooks P E K H) (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H) (primitive : BackendPrimitive)
+    (validRange : WrappingRange)
+    (backend : place.layout.backendRepr = .Scalar (.Initialized (value := primitive) (validRange := validRange)))
+    (width : primitive.size runtime = .ok place.layout.size) :
+    readImmediate memory hooks (.indirect place.mplace) place.layout runtime ghost kind global access dynamic =
+      scalarReadAfterAccess place.layout primitive runtime
+        (getPlaceAlloc memory hooks place runtime ghost kind global access dynamic) := by
+  have sized : place.layout.backendRepr.isUnsized = false := by rw [backend]; rfl
+  have readable : isPrimitiveReadable place.layout.backendRepr = true := by rw [backend]; rfl
+  rw [immediateRead_eq_afterAccess _ _ place _ _ _ _ _ _ sized readable]
+  simp only [readImmediateAfterAccess, scalarReadAfterAccess, BackendRepr.isUnsized, backend,
+    Bool.false_eq_true, ↓reduceIte, readPlan, width, bne_self_eq_false,
+    Id.run, bind, Bind.bind, pure, Pure.pure, Except.mapError, Except.bind, Except.pure]
+  generalize getPlaceAlloc memory hooks place runtime ghost kind global access dynamic = selected
+  cases selected.outcome with
+  | error error => rfl
+  | ok value =>
+    cases value with
+    | none => rfl
+    | some reference =>
+      dsimp only
+      generalize readScalarAt reference runtime Size.ZERO place.layout.size (scalarReadProvenance primitive) = scalar
+      cases scalar <;> rfl
+
 end Miri.Interpreter

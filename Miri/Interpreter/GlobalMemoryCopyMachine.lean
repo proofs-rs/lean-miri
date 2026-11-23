@@ -43,7 +43,7 @@ private def raw [DecidableEq K] (config : PlaceMachine.AccessConfig K U)
 
 /-- Reads may touch a borrowed global's interior extra. Keep its snapshot via
 required touched-state policy, never eagerly promote it to a local allocation. -/
-private def access [DecidableEq K] (config : PlaceMachine.AccessConfig K U)
+def access [DecidableEq K] (config : PlaceMachine.AccessConfig K U)
     (write : Bool) (allocation : Allocation Provenance BorrowTree) (id : AllocId)
     (provenance : ProvenanceExtra) (range : AllocRange) : MachineHooks.M K U (Allocation Provenance BorrowTree) := do
   let state ← get

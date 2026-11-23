@@ -47,30 +47,54 @@ structure PtrAllocationResult (Prov Extra MachineKind HookState α : Type) where
 namespace AllocationAccess
 variable {Prov Extra MachineKind HookState ProvExtra : Type}
 
+/-- Pointer access can finish during resolution or reach the memory hook
+after selecting and checking an allocation. -/
+inductive PreparedPtrAllocation (P E K H X : Type) where
+  | finished (result : PtrAllocationResult P E K H (Option (AllocationAccessRef P E)))
+  | access (memory : MemoryState P E K) (hooks : H) (provenance : X)
+      (reference : AllocationAccessRef P E)
+
+/-- Commit an access hook's updated allocation extra before reporting its
+success or failure. Both outcomes retain the updated snapshot. -/
+def finishCheckedAccess [DecidableEq MachineKind] (write : Bool) (memory : MemoryState Prov Extra MachineKind)
+    (reference : AllocationAccessRef Prov Extra) (access : AllocationExtraHookResult HookState Extra) :
+    PtrAllocationResult Prov Extra MachineKind HookState (Option (AllocationAccessRef Prov Extra)) :=
+  let updated := {reference with allocation := reference.allocation.setExtra access.extra}
+  let cached := if memory.live.any (fun entry => entry.1 == reference.allocId) then
+      memory.setLiveAllocation reference.allocId updated.allocation
+    else .ok memory
+  match cached with
+  | .error error => ⟨memory, access.state, some updated, .error (.cacheUpdate error)⟩
+  | .ok after =>
+    let outcome := match access.outcome with
+      | .ok () => .ok (some updated)
+      | .error message =>
+        .error (.hookFailure (if write then "beforeMemoryWrite" else "beforeMemoryRead") message)
+    ⟨after, access.state, some updated, outcome⟩
+
 /-- Unified implementation of source `get_ptr_alloc` and `get_ptr_alloc_mut`.
 `write` selects exactly their different raw lookup and access-hook order. -/
-private def getPtrAllocation [DecidableEq MachineKind]
+def preparePtrAllocation [DecidableEq MachineKind]
     (initialMemory : MemoryState Prov Extra MachineKind) (initialHooks : HookState)
     (target : PointerArithmetic) (ptr : Pointer (Option Prov)) (size : Size)
     (ghostMode : Bool) (globalKind : Option MachineKind)
     (globalHooks : GlobalAllocationHooks Prov Extra MachineKind HookState)
     (accessHooks : AllocationAccessHooks Prov Extra MachineKind HookState ProvExtra)
     (write : Bool) :
-    PtrAllocationResult Prov Extra MachineKind HookState
-      (Option (AllocationAccessRef Prov Extra)) := Id.run do
+    PreparedPtrAllocation Prov Extra MachineKind HookState ProvExtra := Id.run do
   let mut memory := initialMemory
   let mut hookState := initialHooks
   let signedSize ← match sizeAsI64 size with
     | .ok amount => pure amount
-    | .error error => return ⟨memory, hookState, none, .error (.access error)⟩
+    | .error error => return .finished ⟨memory, hookState, none, .error (.access error)⟩
   let mut checked : Option (ResolvedPointer ProvExtra × AllocationAccessRef Prov Extra) := none
   if signedSize != 0 then
     let resolution := accessHooks.resolvePointer memory hookState ptr signedSize
     hookState := resolution.state
     let resolved ← match resolution.outcome with
-      | .error message => return ⟨memory, hookState, none,
+      | .error message => return .finished ⟨memory, hookState, none,
           .error (.hookFailure "ptrTryGetAllocId" message)⟩
-      | .ok (.error address) => return ⟨memory, hookState, none,
+      | .ok (.error address) => return .finished ⟨memory, hookState, none,
           .error (.access (.danglingIntegerPointer address signedSize .memoryAccess))⟩
       | .ok (.ok resolved) => pure resolved
     let raw := if write then
@@ -80,11 +104,11 @@ private def getPtrAllocation [DecidableEq MachineKind]
     hookState := raw.hooks
     let allocation ← match raw.outcome with
       | .ok allocation => pure allocation
-      | .error error => return ⟨memory, hookState, none, .error (.rawAccess error)⟩
+      | .error error => return .finished ⟨memory, hookState, none, .error (.rawAccess error)⟩
     let reference : AllocationAccessRef Prov Extra :=
       ⟨resolved.allocId, allocRange resolved.offset size, allocation⟩
     match checkedBounds target resolved.allocId allocation.byteSize resolved.offset signedSize .memoryAccess with
-    | .error error => return ⟨memory, hookState, some reference, .error (.access error)⟩
+    | .error error => return .finished ⟨memory, hookState, some reference, .error (.access error)⟩
     | .ok () => checked := some (resolved, reference)
   if !ghostMode then
     let accessId ← if write then
@@ -94,7 +118,7 @@ private def getPtrAllocation [DecidableEq MachineKind]
         let resolution := accessHooks.resolvePointer memory hookState ptr signedSize
         hookState := resolution.state
         match resolution.outcome with
-        | .error message => return ⟨memory, hookState, checked.map Prod.snd,
+        | .error message => return .finished ⟨memory, hookState, checked.map Prod.snd,
             .error (.hookFailure "ptrTryGetAllocId" message)⟩
         | .ok (.error _) => pure none
         | .ok (.ok resolved) => pure (some resolved.allocId)
@@ -102,28 +126,38 @@ private def getPtrAllocation [DecidableEq MachineKind]
       let access := accessHooks.beforeAllocationAccess hookState accessId
       hookState := access.state
       if let .error message := access.outcome then
-        return ⟨memory, hookState, checked.map Prod.snd,
+        return .finished ⟨memory, hookState, checked.map Prod.snd,
           .error (.hookFailure "beforeAllocAccess" message)⟩
     if let some (resolved, reference) := checked then
-      let access := if write then
-          accessHooks.beforeMemoryWrite hookState reference.allocation.extra ptr
-            reference.allocId resolved.extra reference.range
-        else accessHooks.beforeMemoryRead hookState reference.allocation.extra ptr
-            reference.allocId resolved.extra reference.range
-      hookState := access.state
-      let updated := { reference with allocation := reference.allocation.setExtra access.extra }
-      -- Borrowed CTFE globals have no local cache entry. Miri's owned global
-      -- conversions and all mutable accesses do have one.
-      if memory.live.any (fun entry => entry.1 == reference.allocId) then
-        match memory.setLiveAllocation reference.allocId updated.allocation with
-        | .ok afterUpdate => memory := afterUpdate
-        | .error error => return ⟨memory, hookState, some updated, .error (.cacheUpdate error)⟩
-      checked := some (resolved, updated)
-      if let .error message := access.outcome then
-        return ⟨memory, hookState, some updated,
-          .error (.hookFailure (if write then "beforeMemoryWrite" else "beforeMemoryRead") message)⟩
+      return .access memory hookState resolved.extra reference
   let reference := checked.map Prod.snd
-  return ⟨memory, hookState, reference, .ok reference⟩
+  return .finished ⟨memory, hookState, reference, .ok reference⟩
+
+/-- Execute the memory hook selected by pointer preparation and commit its
+result. Early failures and zero-sized accesses retain their original result. -/
+def finishPreparedAccess [DecidableEq MachineKind]
+    (accessHooks : AllocationAccessHooks Prov Extra MachineKind HookState ProvExtra)
+    (write : Bool) (ptr : Pointer (Option Prov))
+    (prepared : PreparedPtrAllocation Prov Extra MachineKind HookState ProvExtra) :
+    PtrAllocationResult Prov Extra MachineKind HookState (Option (AllocationAccessRef Prov Extra)) :=
+  match prepared with
+  | .finished result => result
+  | .access memory hooks provenance reference =>
+    let access := if write then
+      accessHooks.beforeMemoryWrite hooks reference.allocation.extra ptr reference.allocId provenance reference.range
+    else
+      accessHooks.beforeMemoryRead hooks reference.allocation.extra ptr reference.allocId provenance reference.range
+    finishCheckedAccess write memory reference access
+
+def getPtrAllocation [DecidableEq MachineKind]
+    (memory : MemoryState Prov Extra MachineKind) (hooks : HookState)
+    (target : PointerArithmetic) (ptr : Pointer (Option Prov)) (size : Size)
+    (ghost : Bool) (kind : Option MachineKind)
+    (globals : GlobalAllocationHooks Prov Extra MachineKind HookState)
+    (access : AllocationAccessHooks Prov Extra MachineKind HookState ProvExtra) (write : Bool) :
+    PtrAllocationResult Prov Extra MachineKind HookState (Option (AllocationAccessRef Prov Extra)) :=
+  finishPreparedAccess access write ptr
+    (preparePtrAllocation memory hooks target ptr size ghost kind globals access write)
 
 def getPtrAlloc [DecidableEq MachineKind]
     (memory : MemoryState Prov Extra MachineKind) (hooksState : HookState)
@@ -177,7 +211,7 @@ theorem live_mut_of_edges (memory : MemoryState P E K) (hooks : H)
   have raw : MemoryLifecycle.getAllocRawMut memory hooks id kind global =
       ⟨memory,hooks,.ok entry.allocation⟩ := by
     simp [MemoryLifecycle.getAllocRawMut,live,mutable,synchronize]
-  unfold getPtrAllocMut getPtrAllocation
+  unfold getPtrAllocMut getPtrAllocation preparePtrAllocation
   rw [signed]
   dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
   simp only [nonzero,bne_iff_ne,↓reduceIte]
@@ -190,7 +224,67 @@ theorem live_mut_of_edges (memory : MemoryState P E K) (hooks : H)
   simp only [nonzero,↓reduceIte,Bool.not_false,Option.map_some]
   rw [before]
   dsimp only [bind,Bind.bind,pure,Pure.pure]
-  rw [write]
-  simp only [sameExtra]
+  simp only [ite_eq_left nonzero]
+  simp only [finishPreparedAccess, finishCheckedAccess, ↓reduceIte, write, sameExtra]
   split <;> simp_all [cache,bind,Bind.bind,pure,Pure.pure]
+end Miri.Memory.AllocationAccess
+
+namespace Miri.Memory.AllocationAccess
+open Miri.ABI
+
+variable {P E K H X : Type} [DecidableEq K]
+
+/-- A nonzero, bounds-checked access in normal execution reaches the
+actual memory hook. Raw lookup may materialize a global and may update
+the initial hook state. A read resolves the pointer again before probing. -/
+theorem getPtrAlloc_checked
+    (write : Bool) (memory rawMemory : MemoryState P E K) (hooks resolvedHooks rawHooks ready : H)
+    (target : PointerArithmetic) (ptr : Pointer (Option P)) (size : Size) (kind : Option K)
+    (global : GlobalAllocationHooks P E K H) (access : AllocationAccessHooks P E K H X)
+    (resolved probed : ResolvedPointer X) (allocation : Allocation P E) (amount : Int) (probeState : H)
+    (signed : sizeAsI64 size = .ok amount) (nonzero : amount ≠ 0)
+    (resolve : access.resolvePointer memory hooks ptr amount = ⟨resolvedHooks, .ok (.ok resolved)⟩)
+    (raw : (if write then MemoryLifecycle.getAllocRawMut memory resolvedHooks resolved.allocId kind global
+      else MemoryLifecycle.getAllocRaw memory resolvedHooks resolved.allocId kind global) =
+        ⟨rawMemory, rawHooks, .ok allocation⟩)
+    (bounds : checkedBounds target resolved.allocId allocation.byteSize resolved.offset amount .memoryAccess = .ok ())
+    (probe : write = false → access.resolvePointer rawMemory rawHooks ptr amount =
+      ⟨probeState, .ok (.ok probed)⟩)
+    (before : access.beforeAllocationAccess (if write then rawHooks else probeState)
+      (if write then resolved.allocId else probed.allocId) =
+      ⟨ready,.ok ()⟩) :
+    (if write then getPtrAllocMut memory hooks target ptr size false kind global access
+      else getPtrAlloc memory hooks target ptr size false kind global access) =
+      let range := allocRange resolved.offset size
+      finishCheckedAccess write rawMemory ⟨resolved.allocId, range, allocation⟩
+        ((if write then access.beforeMemoryWrite else access.beforeMemoryRead) ready
+          allocation.extra ptr resolved.allocId resolved.extra range) := by
+  have same :
+      (if write then getPtrAllocMut memory hooks target ptr size false kind global access
+        else getPtrAlloc memory hooks target ptr size false kind global access) =
+        getPtrAllocation memory hooks target ptr size false kind global access write := by
+    cases write <;> rfl
+  rw [same]
+  unfold getPtrAllocation preparePtrAllocation
+  rw [signed]
+  dsimp only [Id.run, bind, Bind.bind, pure, Pure.pure]
+  simp only [bne_iff_ne, ite_eq_left nonzero]
+  rw [resolve]
+  dsimp only
+  rw [raw]
+  dsimp only
+  rw [bounds]
+  dsimp only
+  cases write
+  · simp only [Bool.false_eq_true, ↓reduceIte, Bool.not_false]
+    rw [probe rfl]
+    dsimp only
+    rw [show access.beforeAllocationAccess probeState probed.allocId = ⟨ready, .ok ()⟩ from before]
+    dsimp only
+    rfl
+  · simp only [↓reduceIte, Bool.not_false, Option.map_some]
+    rw [show access.beforeAllocationAccess rawHooks resolved.allocId = ⟨ready, .ok ()⟩ from before]
+    dsimp only
+    rfl
+
 end Miri.Memory.AllocationAccess

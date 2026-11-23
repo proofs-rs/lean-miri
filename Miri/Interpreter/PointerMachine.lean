@@ -73,6 +73,21 @@ def addrFromAllocId (h : Hooks K U) (id : AllocId)
     finish h (cached.cacheAddress id address)
     return address
 
+/-- Commit the selected allocation's Tree Borrows exposure and classify its
+outcome after the memory update. -/
+def exposeTree [DecidableEq K] (id : AllocId)
+    (allocation : Allocation Provenance Miri.TreeBorrows.BorrowTree)
+    (tags : Miri.TreeBorrows.ProtectedTags) (tag : BorTag) : M K U Unit := do
+  let machine := (← get).machine
+  let result := allocation.extra.exposeTag tags tag
+  let memory ← match machine.memory.setLiveAllocation id (allocation.setExtra result.tree) with
+    | .ok memory => pure memory
+    | .error error => throw (.invalidProgram s!"exposure tree update: {reprStr error}")
+  modify fun state => { state with machine := { state.machine with memory } }
+  match result.outcome with
+  | .ok () => pure ()
+  | .error error => throw (.invalidProgram s!"Tree Borrows exposure invariant: {reprStr error}")
+
 /-- Exposure commits set membership before materializing globals or mutating TB.
 All per-range tree mutations are retained even when exposure fails. -/
 def exposeProvenance [DecidableEq K] (h : Hooks K U) (provenance : Provenance) : M K U Unit := do
@@ -92,14 +107,7 @@ def exposeProvenance [DecidableEq K] (h : Hooks K U) (provenance : Provenance) :
       | throw (.invalidProgram "borrow tracker removed during exposure")
     let some entry := machine.memory.live.find? (fun entry => entry.1 == id)
       | throw (.invalidProgram "exposed allocation has no Tree Borrows extra")
-    let result := entry.2.allocation.extra.exposeTag tracker.global.protectedTags tag
-    let memory ← match machine.memory.setLiveAllocation id (entry.2.allocation.setExtra result.tree) with
-      | .ok memory => pure memory
-      | .error error => throw (.invalidProgram s!"exposure tree update: {reprStr error}")
-    modify fun state => { state with machine := { state.machine with memory } }
-    match result.outcome with
-    | .ok () => pure ()
-    | .error error => throw (.invalidProgram s!"Tree Borrows exposure invariant: {reprStr error}")
+    exposeTree id entry.2.allocation tracker.global.protectedTags tag
 
 /-- Integer casts create wildcard provenance without allocation resolution. -/
 def pointerFromExposedAddress (h : Hooks K U) (address : UInt64) :

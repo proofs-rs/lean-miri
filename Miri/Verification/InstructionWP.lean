@@ -153,31 +153,31 @@ theorem unwindPre_iff (hooks : Controls) (choice : C) (action : UnwindAction)
         simp_all [locationPre, ControlFlow.setLocation, bind, Bind.bind, pure, Pure.pure, resultPre]
   · exact jumpPre_iff _ _ _ _
 
-def cleanupPre (hooks : Controls) (choice : C) (unwinding : Bool) (frame : Frame P L E)
-    (post : Post) (onError : Errors) (state : State) : Prop :=
-  resultPre (fun action after =>
-    match action with
-    | .noJump => post after
-    | .noCleanup =>
-      if !after.stack.frames.isEmpty || unwinding then
-        onError (.invalidProgram "NoCleanup requires empty stack and normal return") after
+def finishReturnPre (hooks : Controls) (choice : C) (unwinding : Bool) (frame : Frame P L E)
+    (post : Post) (onError : Errors) (action : ReturnAction) (after : State) : Prop :=
+  match action with
+  | .noJump => post after
+  | .noCleanup =>
+    if !after.stack.frames.isEmpty || unwinding then
+      onError (.invalidProgram "NoCleanup requires empty stack and normal return") after
+    else post after
+  | .normal =>
+    match frame.returnContinuation with
+    | .goto ret unwind =>
+      if unwinding then unwindPre hooks choice unwind post onError after
+      else match ret with
+        | some block => jumpPre block post onError after
+        | none => onError (.undefinedBehavior "Unreachable") after
+    | .stop _ =>
+      if unwinding || !after.stack.frames.isEmpty then
+        onError (.invalidProgram "Stop continuation requires normal root return") after
       else post after
-    | .normal =>
-      match frame.returnContinuation with
-      | .goto ret unwind =>
-        if unwinding then unwindPre hooks choice unwind post onError after
-        else match ret with
-          | some block => jumpPre block post onError after
-          | none => onError (.undefinedBehavior "Unreachable") after
-      | .stop _ =>
-        if unwinding || !after.stack.frames.isEmpty then
-          onError (.invalidProgram "Stop continuation requires normal root return") after
-        else post after)
-    onError (hooks.cleanupFrame choice unwinding frame state)
 
 /-- On return, check the saved stack location before reading, then use the
 popped frame to determine where to copy and which continuation to follow. -/
-def returnPre (hooks : Controls) (choice : C) (unwinding : Bool)
+def returnPreWithEffects (hooks : Controls) (choice : C) (unwinding : Bool)
+    (pop : (Frame P L E → State → Prop) → Errors → State → Prop)
+    (cleanupEffect : Frame P L E → (ReturnAction → State → Prop) → Errors → State → Prop)
     (post : Post) (onError : Errors) (state : State) : Prop :=
   let checked (cleanup : Bool) :=
     if unwinding != cleanup then
@@ -186,11 +186,11 @@ def returnPre (hooks : Controls) (choice : C) (unwinding : Bool)
       onError (.undefinedBehavior "unwinding past the topmost stack frame") state
     else
       resultPre (fun value read =>
-        resultPre (fun frame popped =>
-          let clean := cleanupPre hooks choice unwinding frame post onError
+        pop (fun frame popped =>
+          let clean := cleanupEffect frame (finishReturnPre hooks choice unwinding frame post onError) onError
           if unwinding then clean popped
           else resultPre (fun _ => clean) onError (hooks.copyReturn choice value frame.returnPlace popped))
-          onError (hooks.popFrame choice read))
+          onError read)
         onError (hooks.returnOperand choice state)
   match state.stack.currentFrame? with
   | none => onError (.stack .emptyStack) state
@@ -202,12 +202,33 @@ def returnPre (hooks : Controls) (choice : C) (unwinding : Bool)
       | none => onError (.invalidBlock loc.block) state
       | some block => checked block.cleanup
 
+/-- The generic hook uses its precise output as the frame-pop boundary. -/
+def returnPre (hooks : Controls) (choice : C) (unwinding : Bool)
+    (post : Post) (onError : Errors) (state : State) : Prop :=
+  returnPreWithEffects hooks choice unwinding
+    (fun finish failure read => resultPre finish failure (hooks.popFrame choice read))
+    (fun frame finish failure popped => resultPre finish failure (hooks.cleanupFrame choice unwinding frame popped))
+    post onError state
+
+theorem returnPreWithEffects_congr (hooks : Controls) (choice : C) (unwinding : Bool)
+    {pop pop' : (Frame P L E → State → Prop) → Errors → State → Prop}
+    {cleanup cleanup' : Frame P L E → (ReturnAction → State → Prop) → Errors → State → Prop}
+    (popEq : ∀ finish failure read, pop finish failure read ↔ pop' finish failure read)
+    (cleanupEq : ∀ frame finish failure popped,
+      cleanup frame finish failure popped ↔ cleanup' frame finish failure popped)
+    (post : Post) (onError : Errors) (state : State) :
+    returnPreWithEffects hooks choice unwinding pop cleanup post onError state ↔
+      returnPreWithEffects hooks choice unwinding pop' cleanup' post onError state := by
+  rw [funext fun finish => funext fun failure => funext fun read => propext (popEq finish failure read),
+    funext fun frame => funext fun finish => funext fun failure => funext fun popped =>
+      propext (cleanupEq frame finish failure popped)]
+
 set_option maxHeartbeats 1000000 in
 theorem returnPre_iff (hooks : Controls) (choice : C) (unwinding : Bool)
     (post : Post) (onError : Errors) (state : State) :
     returnPre hooks choice unwinding post onError state ↔
       resultPre (fun _ => post) onError (ControlFlow.returnFromCurrentFrame hooks choice unwinding state) := by
-  simp only [returnPre, ControlFlow.returnFromCurrentFrame, Id.run, bind, Bind.bind,
+  simp only [returnPre, returnPreWithEffects, ControlFlow.returnFromCurrentFrame, Id.run, bind, Bind.bind,
     pure, Pure.pure]
   cases found : state.stack.currentFrame? with
   | none => rfl
@@ -240,11 +261,11 @@ theorem returnPre_iff (hooks : Controls) (choice : C) (unwinding : Bool)
                   simp only [copied, Bool.not_false, Bool.false_eq_true, ↓reduceIte]
                   rcases cleaned : hooks.cleanupFrame choice false frame after with ⟨after, outcome⟩
                   cases outcome with
-                  | error => simp [cleanupPre, cleaned, resultPre]
+                  | error => simp [cleaned, finishReturnPre, resultPre]
                   | ok action =>
                     cases action with
                     | normal =>
-                      simp only [cleanupPre, cleaned, resultPre, Bool.false_eq_true, ↓reduceIte]
+                      simp only [cleaned, finishReturnPre, resultPre, Bool.false_eq_true, ↓reduceIte]
                       cases continuation : frame.returnContinuation with
                       | goto ret unwind =>
                         simp only
@@ -254,24 +275,24 @@ theorem returnPre_iff (hooks : Controls) (choice : C) (unwinding : Bool)
                       | stop =>
                         simp only
                         split <;> rfl
-                    | noJump => simp [cleanupPre, cleaned, resultPre]
+                    | noJump => simp [cleaned, finishReturnPre, resultPre]
                     | noCleanup =>
-                      simp only [cleanupPre, cleaned, resultPre]
+                      simp only [cleaned, finishReturnPre, resultPre]
                       split <;> rfl
               · simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte]
                 rcases cleaned : hooks.cleanupFrame choice true frame popState with ⟨after, outcome⟩
                 cases outcome with
-                | error => simp [cleanupPre, cleaned, resultPre]
+                | error => simp [cleaned, finishReturnPre, resultPre]
                 | ok action =>
                   cases action with
                   | normal =>
-                    simp only [cleanupPre, cleaned, resultPre, ↓reduceIte]
+                    simp only [cleaned, finishReturnPre, resultPre, ↓reduceIte]
                     cases continuation : frame.returnContinuation with
                     | goto ret unwind =>
                       simpa only [resultPre] using unwindPre_iff hooks choice unwind post onError after
                     | stop => simp
-                  | noJump => simp [cleanupPre, cleaned, resultPre]
-                  | noCleanup => simp [cleanupPre, cleaned, resultPre]
+                  | noJump => simp [cleaned, finishReturnPre, resultPre]
+                  | noCleanup => simp [cleaned, finishReturnPre, resultPre]
 
 /-- Compare cases in order, threading the state from every comparison, and
 stop at the first match or error. -/
@@ -330,12 +351,13 @@ theorem switchPre_iff (hooks : Terminators) (choice : C) (discr : Operand) (targ
 
 /-- The continuation begins after the driver's pre-terminator hook. The
 selected terminator retains its original source information across that hook. -/
-def terminatorPre (hooks : Terminators) (choice : C) (term : Terminator)
+def terminatorPreWithReturn (hooks : Terminators) (choice : C) (term : Terminator)
+    (returnFromFrame : Bool → Post → Errors → State → Prop)
     (post : Post) (onError : Errors) (state : State) : Prop :=
   match term.kind with
   | .Goto target _ => jumpPre target post onError state
-  | .Return => returnPre hooks.toControlHooks choice false post onError state
-  | .UnwindResume => returnPre hooks.toControlHooks choice true post onError state
+  | .Return => returnFromFrame false post onError state
+  | .UnwindResume => returnFromFrame true post onError state
   | .UnwindTerminate reason => resultPre (fun _ => post) onError (hooks.unwindTerminate choice reason state)
   | .Unreachable => onError (.undefinedBehavior "Unreachable") state
   | .InlineAsm _ => onError (.unsupported "inline assembly") state
@@ -363,12 +385,25 @@ def terminatorPre (hooks : Terminators) (choice : C) (term : Terminator)
       else resultPre (fun _ => post) onError (hooks.assertPanic choice message unwind after))
       onError (hooks.readAssertCondition choice condition state)
 
+def terminatorPre (hooks : Terminators) (choice : C) (term : Terminator)
+    (post : Post) (onError : Errors) (state : State) : Prop :=
+  terminatorPreWithReturn hooks choice term (returnPre hooks.toControlHooks choice) post onError state
+
+theorem terminatorPreWithReturn_congr (hooks : Terminators) (choice : C) (term : Terminator)
+    {ret ret' : Bool → Post → Errors → State → Prop}
+    (same : ∀ unwind post onError state, ret unwind post onError state ↔ ret' unwind post onError state)
+    (post : Post) (onError : Errors) (state : State) :
+    terminatorPreWithReturn hooks choice term ret post onError state ↔
+      terminatorPreWithReturn hooks choice term ret' post onError state := by
+  rw [funext fun unwind => funext fun post => funext fun onError => funext fun state =>
+    propext (same unwind post onError state)]
+
 theorem terminatorPre_iff (hooks : Terminators) (choice : C) (term : Terminator)
     (post : Post) (onError : Errors) (state : State) :
     terminatorPre hooks choice term post onError state ↔
       resultPre (fun _ => post) onError (ControlFlow.evalTerminator hooks choice term state) := by
   obtain ⟨info, kind⟩ := term
-  cases kind <;> simp only [terminatorPre, ControlFlow.evalTerminator, Id.run, pure, Pure.pure] <;> try rfl
+  cases kind <;> simp only [terminatorPre, terminatorPreWithReturn, ControlFlow.evalTerminator, Id.run, pure, Pure.pure] <;> try rfl
   case Goto => exact jumpPre_iff _ _ _ _
   case Return => exact returnPre_iff _ _ _ _ _ _
   case UnwindResume => exact returnPre_iff _ _ _ _ _ _

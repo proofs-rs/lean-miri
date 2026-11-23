@@ -222,6 +222,42 @@ theorem recordNewAccess_debug_of_skip (state : LocationState) (kind : AccessKind
     state.recordNewAccess kind relatedness = .DebugAssertion := by
   simp [recordNewAccess,skip]
 
+/-- The exact per-node permission pullback, including errors that retain a
+newly materialized disabled state. -/
+def resultPre (state : LocationState) (kind : AccessKind) (related : AccessRelatedness)
+    (held : Bool) (finish : AccessResult → Prop) : Prop :=
+  match Miri.TreeBorrows.performAccess kind related state.permission held with
+  | .UndefinedBehavior => finish (.Error state (.ChildAccessForbidden state.permission))
+  | .ImpossibleProtectedReservedIM => finish (.PermissionInvariantFailure state)
+  | .Transition permission =>
+    let next := { state with accessed := state.accessed || !related.isForeign, permission }
+    let transition := ⟨state.permission, permission⟩
+    if held && next.accessed && permission.isDisabled then
+      finish (.Error next (.ProtectedDisabled state.permission))
+    else if !next.possible then finish (.PossibleInvariantFailure next)
+    else finish (.Success next transition)
+
+theorem resultPre_iff (state : LocationState) (kind : AccessKind) (related : AccessRelatedness)
+    (held : Bool) (finish : AccessResult → Prop) :
+    finish (state.performAccess kind related held) ↔ resultPre state kind related held finish := by
+  unfold performAccess resultPre performAccessTransition
+  cases Miri.TreeBorrows.performAccess kind related state.permission held with
+  | UndefinedBehavior => rfl
+  | ImpossibleProtectedReservedIM => rfl
+  | Transition permission =>
+    simp only [PermTransition.applied, beq_self_eq_true, ↓reduceIte,
+      PermTransition.producesDisabled]
+    let next : LocationState := { state with
+      accessed := state.accessed || !related.isForeign, permission }
+    by_cases disabled : (held && next.accessed && permission.isDisabled) = true
+    · simp only [show (held && (state.accessed || !related.isForeign) &&
+          permission.isDisabled) = true from disabled, ↓reduceIte]
+    · have enabled : ¬(held && (state.accessed || !related.isForeign) &&
+          permission.isDisabled) = true := disabled
+      simp only [enabled]
+      cases next.possible <;>
+        simp only [Bool.not_true, Bool.not_false, Bool.false_eq_true, ↓reduceIte]
+
 end LocationState
 
 end Tree

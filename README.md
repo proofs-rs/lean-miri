@@ -95,6 +95,25 @@ it does not generate a safety proof.
 See the [exporter guide](exporter/README.md) for selecting functions with `--root`,
 exporting Cargo projects and the input format.
 
+### Generate verification conditions for interpreter steps
+
+Import `Miri.Verification.ExactWP` and enable `set_option experimental.vcgen true`.
+Use `vcgen` on a `Std.WP.Triple` for `Miri.Verification.StepWP.OutcomeStep.step`.
+The success postcondition can inspect the driver flag and successor state.
+The error postcondition receives the error and the state where execution stopped.
+The generated precondition covers every permitted choice. Use
+`simp only [miri_rvalue]` with the selected MIR and frame facts to expose the
+canonical assignment's place, operand, and copy effects. See the
+[assignment proof fixture](MiriTests/Verification/RvalueWP.lean).
+
+Build the Goto/Nop, Call/Return, and protected-alias proof fixtures.
+
+```bash
+flock --no-fork /tmp/lean-miri-lake-build.lock lake build \
+  MiriTests.Verification.StepWP MiriTests.Verification.CallReturnWP \
+  MiriTests.Verification.TreeBorrowsWP
+```
+
 ## Tests
 
 Run `lake build MiriTests` for self-contained Lean test modules, then

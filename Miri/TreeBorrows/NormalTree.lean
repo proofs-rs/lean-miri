@@ -128,6 +128,74 @@ theorem singletonCellAccess_contract (kind : AccessKind) :
     result.tree.locationStates = #[some ⟨.Cell, true, .None⟩] := by
   cases kind <;> decide
 
+/-- Backward rule for the ordered normal-tree visit. The continuation receives
+the same trace and the materialized state even when a visit fails. -/
+def eventsPre (root : Nat) (kind : AccessKind) (finish : NormalAccessResult → Prop) :
+    List TraversalEvent → NormalTreeState → Prop
+  | [], tree => finish ⟨tree, root, [], .Completed⟩
+  | event :: rest, tree =>
+    let reject status := finish ⟨tree, root, [event], status⟩
+    match tree.stateAt event.node with
+    | none => reject (.MissingLocationState event.node)
+    | some old =>
+      match old.recordNewAccess kind event.relatedness with
+      | .DebugAssertion => reject (.RecordDebugAssertion event.node)
+      | .Recorded recorded =>
+        recorded.resultPre kind event.relatedness (tree.protectedNodes.contains event.node)
+          (fun result => match tree.setState event.node result.resultingState with
+          | none => reject (.MissingLocationState event.node)
+          | some next =>
+            let fail status := finish ⟨next, root, [event], status⟩
+            match result with
+            | .Success _ _ =>
+              eventsPre root kind (fun later =>
+                finish { later with visited := event :: later.visited }) rest next
+            | .Error _ error => fail (.TransitionError event.node error)
+            | .PermissionInvariantFailure _ => fail (.PermissionInvariantFailure event.node)
+            | .TransitionApplicationInvariantFailure _ =>
+                fail (.TransitionApplicationInvariantFailure event.node)
+            | .PossibleInvariantFailure _ => fail (.PossibleInvariantFailure event.node))
+
+theorem eventsPre_iff (root : Nat) (kind : AccessKind) (finish : NormalAccessResult → Prop)
+    (events : List TraversalEvent) (tree : NormalTreeState) :
+    eventsPre root kind finish events tree ↔ finish (processEvents tree root kind events) := by
+  induction events generalizing tree finish with
+  | nil => rfl
+  | cons event rest ih =>
+    simp only [eventsPre, processEvents]
+    cases tree.stateAt event.node with
+    | none => rfl
+    | some old =>
+      dsimp only
+      cases old.recordNewAccess kind event.relatedness with
+      | DebugAssertion => rfl
+      | Recorded recorded =>
+        dsimp only
+        rw [← LocationState.resultPre_iff]
+        generalize recorded.performAccess kind event.relatedness
+          (tree.protectedNodes.contains event.node) = result
+        cases tree.setState event.node result.resultingState with
+        | none => rfl
+        | some next =>
+          dsimp only
+          cases result <;> first | rfl | exact ih _ next
+
+/-- Compute the interpreter's exact visit schedule before pulling the
+continuation through each visited node. -/
+def accessPre (tree : NormalTreeState) (start : Nat) (kind : AccessKind)
+    (mode : ChildrenVisitMode) (finish : NormalAccessResult → Prop) : Prop :=
+  let (root, events) := TraversalTree.traverse tree.topology start mode (skippedForeignNodes tree kind)
+  eventsPre root kind finish events tree
+
+theorem accessPre_iff (tree : NormalTreeState) (start : Nat) (kind : AccessKind)
+    (mode : ChildrenVisitMode) (finish : NormalAccessResult → Prop) :
+    accessPre tree start kind mode finish ↔ finish (performAccess tree start kind mode) := by
+  unfold accessPre performAccess
+  dsimp only
+  generalize TraversalTree.traverse tree.topology start mode (skippedForeignNodes tree kind) = visits
+  rcases visits with ⟨root, events⟩
+  exact eventsPre_iff root kind finish events tree
+
 end NormalTreeState
 
 end Tree
