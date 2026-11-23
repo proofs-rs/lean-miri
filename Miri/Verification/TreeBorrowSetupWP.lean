@@ -246,7 +246,8 @@ elab "finish_allocation_tail " tail:ident : tactic =>
     let some result := target.find? fun e => e.isApp && e.getAppFn == tail &&
         e.getAppNumArgs == 4 | throwError "allocation-tail result not found"
     let (variables, goal) ← (← getMainGoal).generalize #[{ expr := result }]
-    let cases ← goal.cases variables[0]!
+    let some generalized := variables[0]? | throwError "allocation-tail result was not generalized"
+    let cases ← goal.cases generalized
     replaceMainGoal (cases.toList.map (·.mvarId))
     evalTactic (← `(tactic| all_goals rfl))
 
