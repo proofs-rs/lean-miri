@@ -132,6 +132,16 @@ nav a:first-child:hover { background: #1b535d; }
   .highlights li { font-size: 15px; }
 }
 
+/* Project news belongs alongside the introduction, not in the main navigation. */
+.project-news { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; max-width: 720px; margin: 0 auto 48px; padding: 16px 20px; border: 1px solid #b8ceda; border-radius: 8px; background: #f5faff; }
+.project-news h2 { margin: 3px 0 0; padding: 3px 8px; border-radius: 4px; background: #dceef1; color: #175a69; font-size: 12px; line-height: 1.4; text-transform: uppercase; letter-spacing: .06em; }
+.project-news p { margin: 0; font-size: 15px; line-height: 1.55; }
+.project-news a { display: inline-block; font-weight: 650; margin-bottom: 3px; }
+@media (max-width: 600px) {
+  .project-news { grid-template-columns: minmax(0, 1fr); justify-items: start; gap: 8px; margin-bottom: 36px; padding: 14px 16px; }
+  .project-news h2 { margin-top: 0; }
+}
+
 /* Static syntax highlighting for Rust and Lean. */
 pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
 .tok-keyword { color: #a42c69; font-weight: 600; }
@@ -162,6 +172,11 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
     </nav>
   </header>
   <main id="main">
+    <aside class="project-news" aria-labelledby="news-title">
+      <h2 id="news-title">News</h2>
+      <p><a href="https://proofs.rs/blog/how-google-s-zerocopy-project-uses-lean-miri-to-verify-unsafe-rust/">Google’s zerocopy project uses lean-miri in Anneal</a><br>
+      Anneal uses lean-miri’s execution model as a reference for proofs about unsafe Rust operations.</p>
+    </aside>
     <section class="intro" aria-labelledby="intro-title">
       <h2 id="intro-title">Proving Rust programs free of undefined behavior</h2>
       <p>lean-miri is a port of <a href="https://github.com/rust-lang/miri">Miri</a>, Rust’s undefined-behavior checker, to Lean 4. It lets you state and prove safety properties of Rust programs under Miri’s execution model.</p>
@@ -169,6 +184,7 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
     <section class="highlights" aria-labelledby="highlights-title">
       <h2 id="highlights-title">Why lean-miri?</h2>
       <ul>
+        <li><strong>Generate proof obligations from Rust MIR.</strong> The weakest-precondition (WP) workflow turns a function body and a desired outcome into Lean obligations about its starting state. The generator handles branches, loops, and resolved calls without making you write a contract for every basic block. You still supply the assumptions and prove the resulting obligations. <a href="https://github.com/proofs-rs/lean-miri/tree/main/examples/body_vcgen">Try the <code>count_up</code> example</a>.</li>
         <li><strong>Prove claims over arbitrary inputs and executions.</strong> Miri checks concrete executions; Lean lets you quantify over inputs, caller states, and nondeterministic choices. You can state function-level safety properties without constructing an executable test harness, and prove them under explicit assumptions.</li>
         <li><strong>Bring Miri’s language coverage to theorem proving.</strong> Advanced traits and unsafe pointer operations already have implementations in Miri. Porting this mature interpreter offers a path to broad Rust support without designing a verifier around a restricted language subset.</li>
         <li><strong>Preserve Miri’s detailed model of undefined behavior.</strong> Safety depends on more than bounds checks: pointer provenance, aliasing, initialization, and concurrency also matter. The aim is to carry Miri’s execution rules and UB checks into Lean, including its Tree Borrows model.</li>
@@ -214,20 +230,9 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
     <span class="tok-punctuation">}</span>
     <span class="tok-keyword">true</span>
 <span class="tok-punctuation">}</span></code></pre>
-        <p>For every count and every input in the declared domain, the theorem establishes normal return, no interpreter errors, and no undefined behavior on any permitted finite prefix. Caller, resource, and metadata conditions are explicit.</p>
-        <details>
-          <summary>Lean theorem statement</summary>
-          <p class="code-context">DuplicatePrefix.CurrentCallOrdinarySafety</p>
-                <pre class="language-lean"><code><span class="tok-keyword">theorem</span> <span class="tok-function">invoke</span>
-    <span class="tok-punctuation">{</span><span class="tok-variable">options</span> <span class="tok-variable">limits</span> <span class="tok-variable">remaining</span> <span class="tok-variable">span</span> <span class="tok-variable">before</span> <span class="tok-variable">argument</span> <span class="tok-variable">len</span> <span class="tok-variable">place</span><span class="tok-punctuation">}</span>
-    <span class="tok-punctuation">(</span><span class="tok-variable">input</span> <span class="tok-punctuation">:</span> <span class="tok-type">OrdinaryInput</span> <span class="tok-variable">options</span> <span class="tok-variable">limits</span> <span class="tok-variable">remaining</span>
-      <span class="tok-variable">span</span> <span class="tok-variable">before</span> <span class="tok-variable">argument</span> <span class="tok-variable">len</span> <span class="tok-variable">place</span><span class="tok-punctuation">)</span>
-    <span class="tok-punctuation">(</span><span class="tok-variable">count</span> <span class="tok-punctuation">:</span> <span class="tok-type">UInt64</span><span class="tok-punctuation">)</span> <span class="tok-punctuation">:</span>
-    <span class="tok-type">DuplicatePrefixArgumentCallResult</span><span class="tok-punctuation">.</span><span class="tok-type">Result</span>
-      <span class="tok-variable">options</span> <span class="tok-variable">limits</span> <span class="tok-variable">remaining</span> <span class="tok-variable">span</span> <span class="tok-variable">before</span>
-      <span class="tok-variable">argument</span> <span class="tok-variable">len</span> <span class="tok-variable">count</span> <span class="tok-variable">place</span></code></pre>
-                <p>The result concerns interpreter safety under the declared conditions. It does not establish formation from every Rust calling history or an additional guarantee about the returned Boolean.</p>
-        </details>
+        <p>Generate the safety condition from the function’s MIR, then discharge it in Lean. The current proof covers every 64-bit count and both supported Boolean return destinations under an explicit prepared-call contract, including the required Tree Borrows permissions and resource bounds. It does not establish safety for arbitrary caller states.</p>
+        <p>One proof effort using the WP workflow took about five hours. That was time to develop the proof, not a benchmark for Lean checking or a guarantee for other programs.</p>
+        <p><a href="https://github.com/proofs-rs/lean-miri/tree/main/examples/duplicate_prefix_vcgen#safety-for-both-prepared-return-destinations">See the generated condition, theorem, and reproduction steps</a>.</p>
       </article>
     </section>
     <section id="architecture" aria-labelledby="architecture-title">
@@ -239,6 +244,7 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
     <section aria-labelledby="resources-title">
       <h2 id="resources-title">Further reading</h2>
       <ul>
+        <li><a href="https://proofs.rs/blog/how-google-s-zerocopy-project-uses-lean-miri-to-verify-unsafe-rust/">How Google’s zerocopy project uses lean-miri to verify unsafe Rust</a> — how Anneal uses lean-miri as its reference semantics.</li>
         <li><a href="https://proofs-rs.hashnode.dev/lean-miri-formally-proving-rust-programs-free-of-undefined-behavior-with-lean">Introducing lean-miri</a> — the motivation and approach, on the proofs.rs blog.</li>
         <li><a href="Miri.html">API reference</a> — definitions and theorems in the Lean library. The APIs are experimental.</li>
         <li><a href="https://github.com/proofs-rs/lean-miri">GitHub repository</a> — source, build instructions, and development.</li>
