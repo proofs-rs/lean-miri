@@ -165,10 +165,12 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
     <section class="intro" aria-labelledby="intro-title">
       <h2 id="intro-title">Proving Rust programs free of undefined behavior</h2>
       <p>lean-miri is a port of <a href="https://github.com/rust-lang/miri">Miri</a>, Rust’s undefined-behavior checker, to Lean 4. It lets you state and prove safety properties of Rust programs under Miri’s execution model.</p>
+      <p><a href="https://github.com/google/zerocopy/issues/4009">Anneal in the zerocopy project</a> uses lean-miri as a reference for its proofs about Rust memory operations.</p>
     </section>
     <section class="highlights" aria-labelledby="highlights-title">
       <h2 id="highlights-title">Why lean-miri?</h2>
       <ul>
+        <li><strong>Generate proof obligations from Rust MIR.</strong> The new weakest-precondition (WP) workflow generates Lean conditions for whole function bodies, including branches, loops, and known calls. You no longer need to write a contract for every basic block just to generate the conditions. Lean checks the connection to the interpreter; you still prove the obligations for your inputs and assumptions. <a href="https://github.com/proofs-rs/lean-miri/tree/main/examples/body_vcgen">Try the <code>count_up</code> example</a>.</li>
         <li><strong>Prove claims over arbitrary inputs and executions.</strong> Miri checks concrete executions; Lean lets you quantify over inputs, caller states, and nondeterministic choices. You can state function-level safety properties without constructing an executable test harness, and prove them under explicit assumptions.</li>
         <li><strong>Bring Miri’s language coverage to theorem proving.</strong> Advanced traits and unsafe pointer operations already have implementations in Miri. Porting this mature interpreter offers a path to broad Rust support without designing a verifier around a restricted language subset.</li>
         <li><strong>Preserve Miri’s detailed model of undefined behavior.</strong> Safety depends on more than bounds checks: pointer provenance, aliasing, initialization, and concurrency also matter. The aim is to carry Miri’s execution rules and UB checks into Lean, including its Tree Borrows model.</li>
