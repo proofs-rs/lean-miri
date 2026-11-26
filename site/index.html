@@ -136,6 +136,7 @@ nav a:first-child:hover { background: #1b535d; }
 .project-news { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 12px; max-width: 720px; margin: 0 auto 48px; padding: 16px 20px; border: 1px solid #b8ceda; border-radius: 8px; background: #f5faff; }
 .project-news h2 { margin: 3px 0 0; padding: 3px 8px; border-radius: 4px; background: #dceef1; color: #175a69; font-size: 12px; line-height: 1.4; text-transform: uppercase; letter-spacing: .06em; }
 .project-news p { margin: 0; font-size: 15px; line-height: 1.55; }
+.project-news time { color: #465e6d; font-size: 13px; }
 .project-news a { display: inline-block; font-weight: 650; margin-bottom: 3px; }
 @media (max-width: 600px) {
   .project-news { grid-template-columns: minmax(0, 1fr); justify-items: start; gap: 8px; margin-bottom: 36px; padding: 14px 16px; }
@@ -174,7 +175,8 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
   <main id="main">
     <aside class="project-news" aria-labelledby="news-title">
       <h2 id="news-title">News</h2>
-      <p><a href="https://proofs.rs/blog/how-google-s-zerocopy-project-uses-lean-miri-to-verify-unsafe-rust/">Google’s zerocopy project uses lean-miri in Anneal</a><br>
+      <p><time datetime="2026-11-26">November 26, 2026</time><br>
+      <a href="https://proofs.rs/blog/how-google-s-zerocopy-project-uses-lean-miri-to-verify-unsafe-rust/">Google’s zerocopy project uses lean-miri in Anneal</a><br>
       Anneal uses lean-miri’s execution model as a reference for proofs about unsafe Rust operations.</p>
     </aside>
     <section class="intro" aria-labelledby="intro-title">
@@ -184,7 +186,6 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
     <section class="highlights" aria-labelledby="highlights-title">
       <h2 id="highlights-title">Why lean-miri?</h2>
       <ul>
-        <li><strong>Generate proof obligations from Rust MIR.</strong> The weakest-precondition (WP) workflow turns a function body and a desired outcome into Lean obligations about its starting state. The generator handles branches, loops, and resolved calls without making you write a contract for every basic block. You still supply the assumptions and prove the resulting obligations. <a href="https://github.com/proofs-rs/lean-miri/tree/main/examples/body_vcgen">Try the <code>count_up</code> example</a>.</li>
         <li><strong>Prove claims over arbitrary inputs and executions.</strong> Miri checks concrete executions; Lean lets you quantify over inputs, caller states, and nondeterministic choices. You can state function-level safety properties without constructing an executable test harness, and prove them under explicit assumptions.</li>
         <li><strong>Bring Miri’s language coverage to theorem proving.</strong> Advanced traits and unsafe pointer operations already have implementations in Miri. Porting this mature interpreter offers a path to broad Rust support without designing a verifier around a restricted language subset.</li>
         <li><strong>Preserve Miri’s detailed model of undefined behavior.</strong> Safety depends on more than bounds checks: pointer provenance, aliasing, initialization, and concurrency also matter. The aim is to carry Miri’s execution rules and UB checks into Lean, including its Tree Borrows model.</li>
@@ -231,7 +232,7 @@ pre { background: #f5f7fb; color: #293f54; border: 1px solid #dce5ee; }
     <span class="tok-keyword">true</span>
 <span class="tok-punctuation">}</span></code></pre>
         <p>Generate the safety condition from the function’s MIR, then discharge it in Lean. The current proof covers every 64-bit count and both supported Boolean return destinations under an explicit prepared-call contract, including the required Tree Borrows permissions and resource bounds. It does not establish safety for arbitrary caller states.</p>
-        <p>One proof effort using the WP workflow took about five hours. That was time to develop the proof, not a benchmark for Lean checking or a guarantee for other programs.</p>
+        <p>One proof effort using the weakest precondition workflow took about five hours. That was time to develop the proof, not a benchmark for Lean checking or a guarantee for other programs.</p>
         <p><a href="https://github.com/proofs-rs/lean-miri/tree/main/examples/duplicate_prefix_vcgen#safety-for-both-prepared-return-destinations">See the generated condition, theorem, and reproduction steps</a>.</p>
       </article>
     </section>
