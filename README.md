@@ -43,30 +43,39 @@ Alternatively, install Lean locally with `bash tools/setup-lean.sh`, then use
 ### Run a Rust program
 
 The execution pipeline is Rust source → exported MIR JSON → Lean interpreter.
-On Linux x86_64, first prepare the pinned Rust compiler and MIR-enabled standard
-library using the [Rust setup instructions](docs/development.md#rust-toolchain-and-reference-setup).
-Then, from the repository root:
+From the repository root, `lake run interpret` builds the pinned Rust compiler,
+the MIR exporter, the Miri sysroot, and the native Lean runner, then exports
+and executes one Rust source. `rustup` and `cargo` must already be available.
+On Linux x86_64:
 
 ```bash
-bash tools/build-exporter.sh
 mkdir -p scratch
 cat > scratch/example.rs <<'RS'
 fn main() {
     assert_eq!(std::hint::black_box(1_u32) + 1, 2);
 }
 RS
-LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
-  --output scratch/example.json --root main -- scratch/example.rs --crate-name example
-bash tools/run.sh scratch/example.json
+lake run interpret -- scratch/example.rs
 ```
 
-The last command builds and caches the native Lean runner, then executes the
-exported input. Build logs are saved under `scratch/`. Inspect the final `run:`
-line: `finalized_exit code=0` reports normal completion; `undefined_behavior`,
-`unsupported`, `failed` and `pending` report other outcomes. The runner can exit
-with status zero even when the guest does not complete, so its process exit code
-alone is insufficient. Proving safety requires a Lean theorem covering all
-permitted executions.
+The JSON is written to `scratch/example.json`. An executable's entry function
+is selected. Repeat `--root DEF-PATH` to select exact functions, and put rustc
+arguments after `--`. `lake build rustToolchain`, `lake build exporter`, and
+`lake build miriReference` build those pieces alone; a bare `lake build` does
+not. `tools/setup-miri-reference.sh`, `tools/build-exporter.sh`,
+`tools/export-mir.sh`, and `tools/run.sh` call the Lake scripts of the same
+names through `lake` on `PATH`. `build-exporter.sh --features miri-reference`
+builds the separate `exporterMiriReference` target under
+`scratch/lake/exporter-miri-reference`. `export-mir.sh` rebuilds the ordinary
+exporter before each export; it does not build the Miri sysroot. Setup is
+described in the
+[Rust setup instructions](docs/development.md#rust-toolchain-and-reference-setup).
+
+Inspect the final `run:` line: `finalized_exit code=0` reports normal completion;
+`undefined_behavior`, `unsupported`, `failed` and `pending` report other outcomes.
+The runner can exit with status zero even when the guest does not complete, so
+its process exit code alone is insufficient. Proving safety requires a Lean
+theorem covering all permitted executions.
 
 ### Work with the input in Lean
 
@@ -74,8 +83,9 @@ To inspect a single function, export the included `add_one` example with `--root
 This avoids importing the full standard-library startup graph into Lean:
 
 ```bash
-bash tools/export-mir.sh --output scratch/add-one.json --root add_one -- \
-  exporter/fixtures/scope/simple.rs --crate-type=lib --crate-name=scoped_closure
+lake run interpret -- exporter/fixtures/scope/simple.rs \
+  --no-run --output scratch/add-one.json --root add_one \
+  --crate-name scoped_closure -- --crate-type=lib
 ```
 
 Create `scratch/Example.lean`:

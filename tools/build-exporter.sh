@@ -1,33 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export RUSTUP_HOME="${RUSTUP_HOME:-$ROOT/.rustup}"
-export CARGO_HOME="${CARGO_HOME:-$ROOT/.cargo}"
-export PATH="$CARGO_HOME/bin:$PATH"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/exporter/target}"
-PIN_FILE="$ROOT/upstream/miri-source/rust-version"
-EXPECTED_COMMIT=8eb778d04094d3af4b26580cab327e0413eb1e02
-TOOLCHAIN="miri-exporter-${EXPECTED_COMMIT:0:12}"
-if [[ ! -f "$PIN_FILE" || "$(tr -d '\r\n' < "$PIN_FILE")" != "$EXPECTED_COMMIT" ]]; then
-  printf 'Miri rust-version does not match exporter-pinned compiler commit\n' >&2
-  exit 1
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+if ! command -v lake >/dev/null 2>&1; then
+  echo 'lake is not on PATH; run tools/setup-lean.sh and add .elan/bin to PATH (docs/development.md)' >&2
+  exit 127
 fi
-if [[ ! -x "$RUSTUP_HOME/toolchains/$TOOLCHAIN/bin/rustc" ]]; then
-  printf 'Pinned exporter toolchain is not installed: %s (run tools/setup-rustc-exporter.sh explicitly)\n' "$TOOLCHAIN" >&2
-  exit 1
-fi
-INSTALLED_COMMIT="$("$RUSTUP_HOME/toolchains/$TOOLCHAIN/bin/rustc" -vV | sed -n 's/^commit-hash: //p')"
-if [[ "$INSTALLED_COMMIT" != "$EXPECTED_COMMIT" ]]; then
-  printf 'Exporter toolchain commit mismatch: expected %s, got %s\n' "$EXPECTED_COMMIT" "$INSTALLED_COMMIT" >&2
-  exit 1
-fi
-LOG_DIR="${EXPORTER_BUILD_LOG_DIR:-$ROOT/scratch/logs}"
-mkdir -p "$LOG_DIR"
-BUILD_LOG="$LOG_DIR/exporter-release-$(date -u +%Y%m%dT%H%M%S.%N).log"
-printf 'Build log: %s\n' "$BUILD_LOG"
-"$CARGO_HOME/bin/cargo" "+$TOOLCHAIN" build --release --locked --offline --manifest-path "$ROOT/exporter/Cargo.toml" "$@" >"$BUILD_LOG" 2>&1 || {
+# elan picks the toolchain from the caller's directory; --dir does not change it.
+export ELAN_TOOLCHAIN="$(tr -d '\r\n' < "$root/lean-toolchain")"
+log_dir="${EXPORTER_BUILD_LOG_DIR:-$root/scratch/logs}"
+mkdir -p "$log_dir"
+build_log="$log_dir/exporter-release-$(date -u +%Y%m%dT%H%M%S.%N).log"
+printf 'Build log: %s\n' "$build_log"
+flock --no-fork /tmp/lean-miri-lake-build.lock \
+  lake --dir "$root" run build-exporter -- "$@" >"$build_log" 2>&1 || {
   status=$?
-  tail -n 80 "$BUILD_LOG" >&2
+  tail -n 80 "$build_log" >&2
   exit "$status"
 }
-tail -n 12 "$BUILD_LOG"
+tail -n 12 "$build_log"

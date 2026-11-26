@@ -31,8 +31,8 @@ def main():
     env["LD_LIBRARY_PATH"] = str(toolchain / "lib") + ":" + env.get("LD_LIBRARY_PATH", "")
     env["LEAN_MIRI_PREPARED_ALLOC_ID_WORLD"] = "1"
     env["LEAN_MIRI_RUN_PREPARED_MIRI"] = "1"
-    settings = SimpleNamespace(exporter=ROOT / "exporter/target/release/lean-miri-mir-exporter",
-        runner=ROOT / ".lake/build/bin/native_runner", sysroot=ROOT / "scratch/miri-sysroot",
+    settings = SimpleNamespace(exporter=ROOT / "scratch/lake/exporter-miri-reference/release/lean-miri-mir-exporter",
+        runner=ROOT / ".lake/build/bin/native_runner", sysroot=ROOT / "scratch/lake/miri-sysroot",
         export_timeout=180, timeout=180, memory_limit=12 * 1024**3, keep_inputs=True)
     sealed = {str(path): driver.sha256(path) for path in (settings.exporter, settings.runner)}
     driver.SOURCES = ROOT / "tests/x86_pack"

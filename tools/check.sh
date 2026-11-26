@@ -6,7 +6,7 @@ cd "$repo_root"
 export ELAN_HOME="${LEAN_MIRI_ELAN_HOME:-$repo_root/.elan}"
 export CARGO_HOME="${LEAN_MIRI_CARGO_HOME:-$repo_root/.cargo}"
 export RUSTUP_HOME="${LEAN_MIRI_RUSTUP_HOME:-$repo_root/.rustup}"
-export MIRI_SYSROOT="${MIRI_SYSROOT:-$repo_root/scratch/miri-sysroot}"
+export MIRI_SYSROOT="${MIRI_SYSROOT:-$repo_root/scratch/lake/miri-sysroot}"
 export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 source tools/ci/timing.sh
 

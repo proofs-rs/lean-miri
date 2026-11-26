@@ -14,7 +14,7 @@ import time
 from time_command import read_steps
 
 ROOT = Path(__file__).resolve().parents[2]
-REFERENCE_EXPORTER = 'exporter/target/release/lean-miri-mir-exporter'
+REFERENCE_EXPORTER = 'scratch/lake/exporter-miri-reference/release/lean-miri-mir-exporter'
 
 
 @dataclass(frozen=True)

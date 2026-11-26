@@ -27,8 +27,8 @@ def main():
     parser.add_argument('output', type=Path, help='new output directory under scratch/')
     parser.add_argument('--libc', type=Path, required=True,
                         help='actual libc rlib built with tools/build-connected-libc.sh')
-    parser.add_argument('--miri', type=Path, default=ROOT / 'upstream/miri-source/target/debug/miri')
-    parser.add_argument('--miri-build-record', type=Path, default=ROOT / 'scratch/miri-reference-build.json')
+    parser.add_argument('--miri', type=Path, default=ROOT / 'scratch/lake/miri-target/debug/miri')
+    parser.add_argument('--miri-build-record', type=Path, default=ROOT / 'scratch/lake/miri-reference-build.json')
     parser.add_argument('--exporter', type=Path, default=ROOT / 'exporter/target/debug/lean-miri-mir-exporter')
     parser.add_argument('--timeout', type=float, default=600)
     args = parser.parse_args()
@@ -44,7 +44,7 @@ def main():
     output.mkdir(parents=True)
     env = os.environ.copy()
     toolchain = Path(env.get('RUSTUP_HOME', ROOT / '.rustup')) / 'toolchains/miri-exporter-8eb778d04094'
-    sysroot = Path(env.get('MIRI_SYSROOT', ROOT / 'scratch/miri-sysroot')).resolve()
+    sysroot = Path(env.get('MIRI_SYSROOT', ROOT / 'scratch/lake/miri-sysroot')).resolve()
     env['PATH'] = str(toolchain / 'bin') + ':' + env.get('PATH', '')
     env['LD_LIBRARY_PATH'] = str(toolchain / 'lib') + ':' + env.get('LD_LIBRARY_PATH', '')
     env['MIRI_SYSROOT'] = str(sysroot)

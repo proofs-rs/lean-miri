@@ -47,7 +47,7 @@ def lean_string(value):
 
 
 def exporter_environment(env):
-    sysroot = Path(env.get("MIRI_SYSROOT", REPO / "scratch" / "miri-sysroot"))
+    sysroot = Path(env.get("MIRI_SYSROOT", REPO / "scratch" / "lake" / "miri-sysroot"))
     if not (REPO / sysroot).is_dir():
         raise ValueError("pinned Miri sysroot is missing; run tools/setup-miri-reference.sh")
     target = Path(env.get("CARGO_TARGET_DIR", REPO / "exporter" / "target"))

@@ -63,11 +63,68 @@ class PinnedCrateIntegrity(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "archive package identity mismatch"):
             self.materialize(package)
 
+    def test_cached_crate_is_copied_before_download(self):
+        package = self.archive()
+        cached = self.root / "cargo-cache" / "index" / "sample-1.0.0.crate"
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes((self.cache / "sample-1.0.0.crate").read_bytes())
+        (self.cache / "sample-1.0.0.crate").unlink()
+        self.assertEqual(
+            vendor.materialize(package, self.destination, self.cache, self.root / "cargo-cache"),
+            "sample")
+        self.assertTrue((self.destination / "sample-1.0.0" / ".cargo-checksum.json").is_file())
+
     def test_archive_cannot_write_outside_temporary_extraction(self):
         package = self.archive(extra={"../../escaped": b"unexpected"})
         with self.assertRaises(tarfile.OutsideDestinationError):
             self.materialize(package)
         self.assertFalse((self.root / "escaped").exists())
+
+
+class RegistryCache(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def lock(self, text):
+        path = self.root / "Cargo.lock"
+        path.write_text(text)
+        return path
+
+    def test_missing_crates_ignore_non_registry_packages(self):
+        lock = self.lock("""
+[[package]]
+name = "present"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "absent"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "local"
+version = "0.0.1"
+""")
+        cache = self.root / "cache"
+        (cache / "index").mkdir(parents=True)
+        (cache / "index" / "present-1.2.3.crate").write_bytes(b"crate")
+        self.assertEqual(vendor.missing_cached_crates(lock, cache), ["absent 0.1.0"])
+        self.assertEqual(
+            vendor.find_cached_crate(cache, "present", "1.2.3"),
+            cache / "index" / "present-1.2.3.crate")
+
+    def test_unrecognized_registry_is_rejected(self):
+        lock = self.lock("""
+[[package]]
+name = "other"
+version = "1.0.0"
+source = "registry+https://example.invalid"
+""")
+        with self.assertRaisesRegex(ValueError, "unrecognized registry source"):
+            vendor.load_registry_packages(lock)
 
 
 if __name__ == "__main__":

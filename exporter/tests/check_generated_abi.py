@@ -45,7 +45,7 @@ def prepare_negative(kind, source, target):
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--runner", type=Path, required=True)
-    parser.add_argument("--exporter", type=Path, default=ROOT / "exporter/target/release/lean-miri-mir-exporter")
+    parser.add_argument("--exporter", type=Path, default=ROOT / "scratch/lake/exporter-miri-reference/release/lean-miri-mir-exporter")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
@@ -56,7 +56,7 @@ def main():
     env["LEAN_MIRI_PREPARED_ALLOC_ID_WORLD"] = "1"
     env["LEAN_MIRI_RUN_PREPARED_MIRI"] = "1"
     settings = SimpleNamespace(exporter=args.exporter.resolve(),
-        runner=args.runner.resolve(), sysroot=ROOT / "scratch/miri-sysroot",
+        runner=args.runner.resolve(), sysroot=ROOT / "scratch/lake/miri-sysroot",
         export_timeout=180, timeout=180, memory_limit=12 * 1024**3, keep_inputs=True)
     binary_hashes = [driver.sha256(settings.exporter), driver.sha256(settings.runner)]
     driver.SOURCES = ROOT / "exporter/fixtures/fail_closed"

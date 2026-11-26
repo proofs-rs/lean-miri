@@ -12,7 +12,7 @@ fn run(program: &str, args: &[&str]) {
     for (name, default) in [
         ("RUSTUP_HOME", root.join(".rustup")),
         ("CARGO_HOME", root.join(".cargo")),
-        ("MIRI_SYSROOT", root.join("scratch/miri-sysroot")),
+        ("MIRI_SYSROOT", root.join("scratch/lake/miri-sysroot")),
     ] {
         if std::env::var_os(name).is_none() {
             command.env(name, default);

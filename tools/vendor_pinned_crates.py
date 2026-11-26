@@ -17,6 +17,40 @@ import tomllib
 import urllib.request
 
 
+CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+
+
+def load_registry_packages(lock_path):
+    """Return crates.io packages from a Cargo.lock, skipping path and git sources."""
+    lock = tomllib.loads(Path(lock_path).read_text())
+    packages = []
+    for package in lock["package"]:
+        source = package.get("source", "")
+        if not source.startswith("registry+"):
+            continue
+        if source != CRATES_IO_SOURCE:
+            raise ValueError(f"unrecognized registry source: {source}")
+        packages.append(package)
+    return packages
+
+
+def find_cached_crate(cargo_cache, name, version):
+    """Return one cached `.crate` for `name-version`, or None."""
+    candidates = list(Path(cargo_cache).glob(f"*/{name}-{version}.crate"))
+    if not candidates:
+        return None
+    return candidates[0]
+
+
+def missing_cached_crates(lock_path, cargo_cache):
+    """Names and versions of locked crates.io packages absent from the cargo cache."""
+    missing = []
+    for package in load_registry_packages(lock_path):
+        if find_cached_crate(cargo_cache, package["name"], package["version"]) is None:
+            missing.append(f"{package['name']} {package['version']}")
+    return missing
+
+
 def materialize(package, destination, cache, cargo_cache):
     name, version, checksum = package["name"], package["version"], package["checksum"]
     directory = destination / f"{name}-{version}"
@@ -30,9 +64,9 @@ def materialize(package, destination, cache, cargo_cache):
         return name
     archive = cache / f"{name}-{version}.crate"
     if not archive.exists():
-        candidates = list(cargo_cache.glob(f"*/{name}-{version}.crate"))
-        if candidates:
-            shutil.copyfile(candidates[0], archive)
+        cached = find_cached_crate(cargo_cache, name, version)
+        if cached is not None:
+            shutil.copyfile(cached, archive)
         else:
             url = f"https://static.crates.io/crates/{name}/{name}-{version}.crate"
             with urllib.request.urlopen(url, timeout=60) as response:
@@ -64,11 +98,7 @@ def main():
     destination.mkdir(parents=True, exist_ok=True)
     cache = destination.parent / "crate-archives"
     cache.mkdir(exist_ok=True)
-    lock = tomllib.loads(args.lock.read_text())
-    packages = [package for package in lock["package"] if package.get("source", "").startswith("registry+")]
-    for package in packages:
-        if package["source"] != "registry+https://github.com/rust-lang/crates.io-index":
-            raise ValueError(f"unrecognized registry source: {package['source']}")
+    packages = load_registry_packages(args.lock)
     failures = []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         pending = {pool.submit(materialize, package, destination, cache, args.cargo_cache): package for package in packages}

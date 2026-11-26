@@ -27,8 +27,8 @@ for relative in SOURCE_PATHS:
     actual = sha256(ROOT / relative)
     assert actual == record["sha256"], f"pinned source hash mismatch for {relative}"
 
-build = json.loads((ROOT / "scratch/miri-reference-build.json").read_text(encoding="utf-8"))
+build = json.loads((ROOT / "scratch/lake/miri-reference-build.json").read_text(encoding="utf-8"))
 assert build["rustc_commit"] == EXPECTED_RUSTC
-binary = ROOT / "upstream/miri-source/target/debug/miri"
+binary = ROOT / "scratch/lake/miri-target/debug/miri"
 assert sha256(binary) == build["binary_sha256"], "pinned reference Miri binary changed"
 print("validated pinned cast.rs/intrinsics.rs and reference Miri binary")

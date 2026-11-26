@@ -87,7 +87,7 @@ mkdir -p scratch/vtable-metadata
 .rustup/toolchains/miri-exporter-8144389c895d/bin/rustc \
   tests/repro/vtable/metadata-producer.rs --crate-type=rlib \
   --crate-name=vtable_metadata_producer --edition=2024 -Cpanic=abort \
-  -Zmir-opt-level=0 -Zalways-encode-mir --cfg=miri --sysroot scratch/miri-sysroot \
+  -Zmir-opt-level=0 -Zalways-encode-mir --cfg=miri --sysroot scratch/lake/miri-sysroot \
   -o scratch/vtable-metadata/libvtable_metadata_producer.rlib
 python3 tools/check-vtable-erasure.py tests/repro/vtable/metadata-consumer.rs \
   scratch/vtable-metadata/consumer.json --expect identity \
@@ -144,7 +144,7 @@ python3 tools/check-timezone.py scratch/timezone-new \
 This runs standalone pinned Miri with isolation explicitly disabled, freshly
 exports the identical Rust/compiler flags/sysroot, and executes those bytes
 through the connected source interpreter with the built-in Chrono-TZ provider.
-The reference binary must match `scratch/miri-reference-build.json` from setup.
+The reference binary must match `scratch/lake/miri-reference-build.json` from setup.
 The reference and exporter have separate TyCtxt/allocation histories; this is a
 finite comparison of guest results, not allocation-ID equality.
 

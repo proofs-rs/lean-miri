@@ -10,7 +10,7 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 export ELAN_HOME="$PWD/.elan" CARGO_HOME="$PWD/.cargo" RUSTUP_HOME="$PWD/.rustup"
 export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
-export MIRI_SYSROOT="$PWD/scratch/miri-sysroot"
+export MIRI_SYSROOT="$PWD/scratch/lake/miri-sysroot"
 export LEAN_NUM_THREADS=1
 mkdir -p scratch/ci
 source tools/ci/timing.sh
@@ -23,7 +23,7 @@ ci_step 'setup:lean' bash tools/setup-lean.sh
   trap 'rm -f "$installer"' EXIT
   ci_step 'setup:rustup-download' curl --fail --location --silent --show-error https://sh.rustup.rs --output "$installer"
   ci_step 'setup:rustup' sh "$installer" -y --no-modify-path --profile minimal --default-toolchain stable
-  ci_step 'setup:rustc-exporter' bash tools/setup-rustc-exporter.sh
+  ci_step 'setup:rustc-toolchain' bash tools/setup-rustc-toolchain.sh
   ci_step 'setup:fetch-source-analysis' cargo +stable fetch --locked --manifest-path tools/source-analysis/Cargo.toml
   if [[ "$lane" != replay ]]; then
     ci_step 'setup:fetch-float-oracle' cargo +stable fetch --locked --manifest-path tests/float_ops/source_oracle/Cargo.toml

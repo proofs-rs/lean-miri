@@ -6,7 +6,7 @@ export ELAN_HOME="${ELAN_HOME:-$ROOT/.elan}"
 export RUSTUP_HOME="${RUSTUP_HOME:-$ROOT/.rustup}"
 export CARGO_HOME="${CARGO_HOME:-$ROOT/.cargo}"
 # Fixture exports use the same pinned Miri std metadata as reference runs.
-export MIRI_SYSROOT="${MIRI_SYSROOT:-$ROOT/scratch/miri-sysroot}"
+export MIRI_SYSROOT="${MIRI_SYSROOT:-$ROOT/scratch/lake/miri-sysroot}"
 export LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-1}"
 TOOLCHAIN="miri-exporter-8eb778d04094"
 SYSROOT="$("$CARGO_HOME/bin/rustup" run "$TOOLCHAIN" rustc --print sysroot)"

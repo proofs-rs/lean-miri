@@ -29,7 +29,7 @@ libc=next(p['version'] for p in pinned['package'] if p['name']=='libc')
 shutil.copyfile(ROOT/'tests/aes/Oracle.rs',oracle/'src/main.rs')
 env={**os.environ,'ELAN_HOME':str(ROOT/'.elan'),'CARGO_HOME':str(ROOT/'.cargo'),'CARGO_TARGET_DIR':str(work/'target'),'RUSTC':str(ROOT/'.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc'),'RUSTFLAGS':'--cfg aes_backend="soft" --cap-lints allow'}
 cargo=str(ROOT/'.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo')
-cargo_command=[cargo,'--config',str(ROOT/'scratch/cargo-vendor.toml')]
+cargo_command=[cargo,'--config',str(ROOT/'scratch/lake/cargo-vendor.toml')]
 subprocess.run(cargo_command+['generate-lockfile','--offline','--manifest-path',str(oracle/'Cargo.toml')],env=env,cwd=ROOT,check=True)
 versions={(p['name'],p['version']):p.get('checksum') for p in pinned['package']}
 actual=tomllib.loads((oracle/'Cargo.lock').read_text())

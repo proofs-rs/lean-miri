@@ -29,7 +29,7 @@ Run from the repository root. Initial downloads require network access.
 
 ```bash
 bash tools/setup-lean.sh
-bash tools/setup-rustc-exporter.sh
+bash tools/setup-rustc-toolchain.sh
 export ELAN_HOME="$PWD/.elan" CARGO_HOME="$PWD/.cargo" RUSTUP_HOME="$PWD/.rustup"
 export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 cargo fetch --locked --manifest-path tools/source-analysis/Cargo.toml
@@ -37,8 +37,11 @@ cargo +miri-exporter-8eb778d04094 fetch --locked --manifest-path exporter/Cargo.
 ```
 
 Fresh comparisons with Miri require a standard library containing MIR from the
-same version. Generate it with `bash tools/setup-miri-reference.sh`. Artifacts
-are stored in `scratch/` and the ignored upstream `target/` directory. Lean replay
+same version. Generate it with `bash tools/setup-miri-reference.sh`. That builds
+the `sourceAudit` and `miriReference` Lake targets. The sysroot is
+`scratch/lake/miri-sysroot`, the reference binary is
+`scratch/lake/miri-target/debug/miri`, and the build record is
+`scratch/lake/miri-reference-build.json`. Lean replay
 of saved fixtures, decoder checks and local proofs do not require the reference
 Miri binary or old working checkouts.
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_HOME="${CARGO_HOME:-$PWD/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$PWD/.rustup}"
-export MIRI_SYSROOT="${MIRI_SYSROOT:-$PWD/scratch/miri-sysroot}"
+export MIRI_SYSROOT="${MIRI_SYSROOT:-$PWD/scratch/lake/miri-sysroot}"
 export CARGO_TARGET_DIR="$PWD/scratch/connected-libc-target"
 export CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="--sysroot $MIRI_SYSROOT --cfg=miri -Zalways-encode-mir -Zextra-const-ub-checks -Zmir-preserve-ub -Zmir-opt-level=0 -Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums -Zmir-enable-passes=-ReferencePropagation,-GVN -Zdeduplicate-diagnostics=no -Zembed-metadata=yes"

@@ -34,13 +34,13 @@ def main():
     args = parser.parse_args()
     cases = json.loads((ROOT / "tests/reference_programs/cases.json").read_text())
     lock = json.loads((ROOT / "upstream/source-lock.json").read_text())
-    sysroot = ROOT / "scratch/miri-sysroot"
+    sysroot = ROOT / "scratch/lake/miri-sysroot"
     toolchain = ROOT / ".rustup/toolchains/miri-exporter-8eb778d04094"
     env = dict(os.environ)
     env["LD_LIBRARY_PATH"] = str(toolchain / "lib") + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     env["MIRI_SYSROOT"] = str(sysroot)
-    binary = ROOT / "upstream/miri-source/target/debug/miri"
-    build = json.loads((ROOT / "scratch/miri-reference-build.json").read_text())
+    binary = ROOT / "scratch/lake/miri-target/debug/miri"
+    build = json.loads((ROOT / "scratch/lake/miri-reference-build.json").read_text())
     if hashlib.sha256(binary.read_bytes()).hexdigest() != build["binary_sha256"]:
         raise SystemExit("reference Miri binary changed since recorded build; rerun setup-miri-reference.sh")
     version = subprocess.run([str(binary), "--version"], env=env, capture_output=True, text=True, check=True).stdout.strip()

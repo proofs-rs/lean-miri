@@ -96,12 +96,12 @@ if [[ -n "${MIRI_SYSROOT:-}" ]]; then
   CARGO_TARGET_DIR="$CARGO_TARGET_BASE" "$EXPORTER" \
     --cargo --root external_generic_call --root external_std_call build --lib -p exporter-cargo-app --offline \
     --manifest-path "$ROOT/exporter/fixtures/cargo-external/Cargo.toml"
-elif [[ -d "$ROOT/scratch/miri-sysroot" ]]; then
-  MIRI_SYSROOT="$ROOT/scratch/miri-sysroot" CARGO_TARGET_DIR="$CARGO_TARGET_BASE" \
+elif [[ -d "$ROOT/scratch/lake/miri-sysroot" ]]; then
+  MIRI_SYSROOT="$ROOT/scratch/lake/miri-sysroot" CARGO_TARGET_DIR="$CARGO_TARGET_BASE" \
     "$EXPORTER" \
     --cargo --root external_generic_call --root external_std_call build --lib -p exporter-cargo-app --offline \
     --manifest-path "$ROOT/exporter/fixtures/cargo-external/Cargo.toml"
-  export MIRI_SYSROOT="$ROOT/scratch/miri-sysroot"
+  export MIRI_SYSROOT="$ROOT/scratch/lake/miri-sysroot"
 else
   CARGO_TARGET_DIR="$CARGO_TARGET_BASE" "$EXPORTER" \
     --cargo --root external_generic_call --root external_std_call build --lib -p exporter-cargo-app --offline \

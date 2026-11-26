@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--runner', required=True, type=Path)
     args = parser.parse_args()
     toolchain = Path(os.environ.get('RUSTUP_HOME', ROOT / '.rustup')) / 'toolchains/miri-exporter-8eb778d04094'
-    sysroot = Path(os.environ.get('MIRI_SYSROOT', ROOT / 'scratch/miri-sysroot'))
+    sysroot = Path(os.environ.get('MIRI_SYSROOT', ROOT / 'scratch/lake/miri-sysroot'))
     env = os.environ.copy()
     env.update(PATH=str(toolchain / 'bin') + ':' + env.get('PATH', ''),
                LD_LIBRARY_PATH=str(toolchain / 'lib'), LEAN_MIRI_PREPARED_ALLOC_ID_WORLD='1',

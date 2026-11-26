@@ -144,7 +144,7 @@ python3 tools/measure-pipeline.py \
   --candidate-exporter /absolute/candidate/exporter \
   --candidate-runner /absolute/candidate/native_runner \
   --rustc-toolchain .rustup/toolchains/miri-exporter-8144389c895d \
-  --miri-sysroot scratch/miri-sysroot --cpu 2 --pairs 3 \
+  --miri-sysroot scratch/lake/miri-sysroot --cpu 2 --pairs 3 \
   --output-dir scratch/performance/pipeline-empty-main \
   -- --crate-name=empty_main --edition=2021
 ```

@@ -162,7 +162,7 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     toolchain = Path(env.get('RUSTUP_HOME', ROOT / '.rustup')) / 'toolchains/miri-exporter-8eb778d04094'
-    sysroot = Path(env.get('MIRI_SYSROOT', ROOT / 'scratch/miri-sysroot'))
+    sysroot = Path(env.get('MIRI_SYSROOT', ROOT / 'scratch/lake/miri-sysroot'))
     elan = Path(env.get('ELAN_HOME', ROOT / '.elan'))
     env['ELAN_HOME'] = str(elan)
     env['PATH'] = f"{toolchain / 'bin'}:{env.get('PATH', '')}"

@@ -20,14 +20,14 @@ ELAN_HOME = Path(os.environ.get('ELAN_HOME', ROOT/'.elan'))
 TOOLCHAIN = RUSTUP_HOME/'toolchains/miri-exporter-8eb778d04094'
 EXPORTER = Path(os.environ.get('CARGO_TARGET_DIR', ROOT/'exporter/target'))/'release/lean-miri-mir-exporter'
 LAKE = ELAN_HOME/'bin/lake'
-MIRI = Path(os.environ.get('MIRI_BINARY', ROOT/'upstream/miri-source/target/debug/miri'))
-SYSROOT = Path(os.environ.get('MIRI_SYSROOT', ROOT/'scratch/miri-sysroot'))
+MIRI = Path(os.environ.get('MIRI_BINARY', ROOT/'scratch/lake/miri-target/debug/miri'))
+SYSROOT = Path(os.environ.get('MIRI_SYSROOT', ROOT/'scratch/lake/miri-sysroot'))
 
 def main():
     env = dict(os.environ, ELAN_HOME=str(ELAN_HOME), RUSTUP_HOME=str(RUSTUP_HOME), CARGO_HOME=str(CARGO_HOME), MIRI_SYSROOT=str(SYSROOT))
     env['PATH'] = str(TOOLCHAIN/'bin')+':'+str(CARGO_HOME/'bin')+':'+env.get('PATH','')
     env['LD_LIBRARY_PATH'] = str(TOOLCHAIN/'lib')+(':'+env['LD_LIBRARY_PATH'] if env.get('LD_LIBRARY_PATH') else '')
-    build = json.loads(Path(os.environ.get('MIRI_REFERENCE_BUILD', ROOT/'scratch/miri-reference-build.json')).read_text())
+    build = json.loads(Path(os.environ.get('MIRI_REFERENCE_BUILD', ROOT/'scratch/lake/miri-reference-build.json')).read_text())
     assert hashlib.sha256(MIRI.read_bytes()).hexdigest() == build['binary_sha256'], 'pinned Miri binary changed'
     lock = json.loads((ROOT/'upstream/source-lock.json').read_text())
     source = ROOT/'exporter/fixtures/scope/simple.rs'

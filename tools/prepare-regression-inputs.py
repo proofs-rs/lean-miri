@@ -33,7 +33,7 @@ def main():
     toolchain = rustup / "toolchains/miri-exporter-8eb778d04094"
     environment["PATH"] = str(toolchain / "bin") + ":" + environment["PATH"]
     environment["LD_LIBRARY_PATH"] = str(toolchain / "lib") + ":" + environment.get("LD_LIBRARY_PATH", "")
-    environment["MIRI_SYSROOT"] = environment.get("MIRI_SYSROOT", str(ROOT / "scratch/miri-sysroot"))
+    environment["MIRI_SYSROOT"] = environment.get("MIRI_SYSROOT", str(ROOT / "scratch/lake/miri-sysroot"))
     environment["LEAN_MIRI_PREPARED_ALLOC_ID_WORLD"] = "1"
     environment["LEAN_MIRI_RUN_PREPARED_MIRI"] = "0"
     exporter = environment.get("EXPORTER_BIN", str(ROOT / "exporter/target/debug/lean-miri-mir-exporter"))

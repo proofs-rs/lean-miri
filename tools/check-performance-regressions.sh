@@ -12,7 +12,7 @@ python3 tests/input/build_id_fixtures.py
 # synthetic ID cases. Regenerate them with the current pinned producer.
 export CARGO_HOME="${LEAN_MIRI_CARGO_HOME:-${CARGO_HOME:-$PWD/.cargo}}"
 export RUSTUP_HOME="${LEAN_MIRI_RUSTUP_HOME:-${RUSTUP_HOME:-$PWD/.rustup}}"
-export MIRI_SYSROOT="${MIRI_SYSROOT:-$PWD/scratch/miri-sysroot}"
+export MIRI_SYSROOT="${MIRI_SYSROOT:-$PWD/scratch/lake/miri-sysroot}"
 export PATH="$CARGO_HOME/bin:$PATH"
 performance_toolchain=miri-exporter-8eb778d04094
 performance_sysroot="$(rustup run "$performance_toolchain" rustc --print sysroot)"

@@ -61,7 +61,7 @@ a C/C++ compiler, make, ripgrep (`rg`) and normal Rust build dependencies availa
 ```bash
 bash tools/ci/setup.sh regression
 export ELAN_HOME="$PWD/.elan" CARGO_HOME="$PWD/.cargo" RUSTUP_HOME="$PWD/.rustup"
-export MIRI_SYSROOT="$PWD/scratch/miri-sysroot" LEAN_NUM_THREADS=1
+export MIRI_SYSROOT="$PWD/scratch/lake/miri-sysroot" LEAN_NUM_THREADS=1
 export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 python3 tools/ci/run.py regression
 ```

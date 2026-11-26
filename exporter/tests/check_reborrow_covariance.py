@@ -66,8 +66,8 @@ def main():
     env["LD_LIBRARY_PATH"] = str(toolchain / "lib") + ":" + env.get("LD_LIBRARY_PATH", "")
     env["LEAN_MIRI_PREPARED_ALLOC_ID_WORLD"] = "1"
     env["LEAN_MIRI_RUN_PREPARED_MIRI"] = "1"
-    settings = SimpleNamespace(exporter=ROOT / "exporter/target/release/lean-miri-mir-exporter",
-        runner=args.runner.resolve(), sysroot=ROOT / "scratch/miri-sysroot",
+    settings = SimpleNamespace(exporter=ROOT / "scratch/lake/exporter-miri-reference/release/lean-miri-mir-exporter",
+        runner=args.runner.resolve(), sysroot=ROOT / "scratch/lake/miri-sysroot",
         export_timeout=180, timeout=180, memory_limit=12 * 1024**3, keep_inputs=True)
     hashes = [driver.sha256(settings.exporter), driver.sha256(settings.runner)]
     record = driver.run_case(Case(CASE), settings, env, args.output)

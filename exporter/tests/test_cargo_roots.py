@@ -17,7 +17,7 @@ class CargoRootTests(unittest.TestCase):
         environment = dict(os.environ)
         environment["PATH"] = f"{toolchain / 'bin'}:{os.environ['PATH']}"
         environment["LD_LIBRARY_PATH"] = f"{toolchain / 'lib'}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-        environment["MIRI_SYSROOT"] = os.environ.get("MIRI_SYSROOT", str(ROOT / "scratch/miri-sysroot"))
+        environment["MIRI_SYSROOT"] = os.environ.get("MIRI_SYSROOT", str(ROOT / "scratch/lake/miri-sysroot"))
         environment["LEAN_MIRI_PREPARED_ALLOC_ID_WORLD"] = "0"
         environment["LEAN_MIRI_RUN_PREPARED_MIRI"] = "0"
         cases = [

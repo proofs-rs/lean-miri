@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--exporter", type=Path,
-        default=ROOT / "exporter/target/release/lean-miri-mir-exporter")
+        default=ROOT / "scratch/lake/exporter-miri-reference/release/lean-miri-mir-exporter")
     parser.add_argument("--runner", type=Path, default=ROOT / ".lake/build/bin/native_runner")
     args = parser.parse_args()
     output = args.output.resolve()
@@ -31,7 +31,7 @@ def main():
     env["LEAN_MIRI_PREPARED_ALLOC_ID_WORLD"] = "1"
     env["LEAN_MIRI_RUN_PREPARED_MIRI"] = "1"
     settings = SimpleNamespace(exporter=args.exporter.resolve(),
-        runner=args.runner.resolve(), sysroot=ROOT / "scratch/miri-sysroot",
+        runner=args.runner.resolve(), sysroot=ROOT / "scratch/lake/miri-sysroot",
         export_timeout=180, timeout=180, memory_limit=12 * 1024**3, keep_inputs=True)
     sealed = {str(path): driver.sha256(path) for path in (settings.exporter, settings.runner)}
     sources = driver.source_fingerprint()

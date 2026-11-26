@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPORTER = ROOT / 'exporter/target/release/lean-miri-mir-exporter'
+EXPORTER = ROOT / 'scratch/lake/exporter-miri-reference/release/lean-miri-mir-exporter'
 FOCUSED = {
     'handoff-acquire': ('tests/repro/atomic-handoff/acquire.rs', 'AtomicHandoff', 'expect-zero'),
     'handoff-relaxed': ('tests/repro/atomic-handoff/relaxed.rs', 'AtomicHandoff', 'expect-race'),
@@ -28,7 +28,7 @@ def environment():
     env = os.environ.copy()
     toolchain = Path(env.get('RUSTUP_HOME', ROOT / '.rustup')) / 'toolchains/miri-exporter-8eb778d04094'
     env.update(ELAN_HOME=env.get('ELAN_HOME', str(ROOT / '.elan')),
-               MIRI_SYSROOT=env.get('MIRI_SYSROOT', str(ROOT / 'scratch/miri-sysroot')),
+               MIRI_SYSROOT=env.get('MIRI_SYSROOT', str(ROOT / 'scratch/lake/miri-sysroot')),
                PATH=str(toolchain / 'bin') + ':' + env.get('PATH', ''),
                LD_LIBRARY_PATH=str(toolchain / 'lib') + ':' + env.get('LD_LIBRARY_PATH', ''),
                LEAN_NUM_THREADS='1')

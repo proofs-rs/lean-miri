@@ -36,7 +36,7 @@ def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--runner", type=Path, required=True)
     parser.add_argument("--exporter", type=Path, required=True)
-    parser.add_argument("--sysroot", type=Path, default=ROOT / "scratch/miri-sysroot")
+    parser.add_argument("--sysroot", type=Path, default=ROOT / "scratch/lake/miri-sysroot")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output = args.output.resolve()

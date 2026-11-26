@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--exporter', type=Path, required=True)
     parser.add_argument('--runner', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--sysroot', type=Path, default=ROOT / 'scratch/miri-sysroot')
+    parser.add_argument('--sysroot', type=Path, default=ROOT / 'scratch/lake/miri-sysroot')
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)

@@ -5,7 +5,7 @@ cd "$repo_root"
 export ELAN_HOME="${ELAN_HOME:-$repo_root/.elan}"
 export CARGO_HOME="${CARGO_HOME:-$repo_root/.cargo}"
 # Fixture exports use the same pinned Miri std metadata as reference runs.
-export MIRI_SYSROOT="${MIRI_SYSROOT:-$repo_root/scratch/miri-sysroot}"
+export MIRI_SYSROOT="${MIRI_SYSROOT:-$repo_root/scratch/lake/miri-sysroot}"
 export RUSTUP_HOME="${RUSTUP_HOME:-$repo_root/.rustup}"
 toolchain="$RUSTUP_HOME/toolchains/miri-exporter-8eb778d04094"
 export PATH="$ELAN_HOME/bin:$toolchain/bin:$CARGO_HOME/bin:$PATH"

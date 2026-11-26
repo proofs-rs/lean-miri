@@ -65,7 +65,7 @@ fn concrete_coroutine_abi_requires_the_runtime_codegen_environment() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let sysroot = std::env::var_os("MIRI_SYSROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| root.parent().unwrap().join("scratch/miri-sysroot"));
+        .unwrap_or_else(|| root.parent().unwrap().join("scratch/lake/miri-sysroot"));
     let output = std::env::temp_dir().join(format!(
         "lean-miri-runtime-abi-{}-{}.rmeta",
         std::process::id(),

@@ -24,7 +24,7 @@ class FailClosedExportTests(unittest.TestCase):
         cls.environment["PATH"] = f"{toolchain / 'bin'}:{os.environ['PATH']}"
         cls.environment["LD_LIBRARY_PATH"] = f"{toolchain / 'lib'}:{os.environ.get('LD_LIBRARY_PATH', '')}"
         cls.environment["MIRI_SYSROOT"] = os.environ.get(
-            "MIRI_SYSROOT", str(ROOT / "scratch/miri-sysroot")
+            "MIRI_SYSROOT", str(ROOT / "scratch/lake/miri-sysroot")
         )
         cls.environment["LEAN_MIRI_PREPARED_ALLOC_ID_WORLD"] = "0"
         cls.environment["LEAN_MIRI_RUN_PREPARED_MIRI"] = "0"
